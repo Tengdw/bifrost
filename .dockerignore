@@ -1,0 +1,24 @@
+# Only explicitly listed application source enters the build context.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!db/
+!db/**
+!web/
+!web/package.json
+!web/package-lock.json
+!web/index.html
+!web/tsconfig.json
+!web/src/
+!web/src/**
+# Local credentials stay excluded even if placed beside source code.
+**/.key
+**/*.key
+**/*.pem
+**/.env
+**/.env.*
+**/secrets/**

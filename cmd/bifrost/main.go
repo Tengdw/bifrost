@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"bifrost/db/migrations"
@@ -89,47 +87,18 @@ func run() error {
 	if len(token) < 32 {
 		return fmt.Errorf("set a random BIFROST_DEMO_SESSION (32+ characters)")
 	}
-	addr := fmt.Sprintf("127.0.0.1:%d", *port)
-	origin := "http://" + addr
-	cert, keyFile := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE")
-	if *mode == "readonly" {
-		if cert == "" || keyFile == "" {
-			return errors.New("readonly mode requires TLS_CERT_FILE and TLS_KEY_FILE")
-		}
-		origin = "https://" + addr
-	}
-	mux := http.NewServeMux()
-	api, err := workspace(ctx, pool, *mode, token, origin)
+	cfg, err := servingConfig(*mode, *port, os.Getenv("BIFROST_LISTEN_ADDR"), os.Getenv("BIFROST_PUBLIC_ORIGIN"), os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE"))
 	if err != nil {
 		return err
 	}
-	mux.Handle("/api/", api)
-	mux.HandleFunc("POST /session", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != origin {
-			http.Error(w, "Forbidden", 403)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		if subtle.ConstantTimeCompare([]byte(r.PostFormValue("token")), []byte(token)) != 1 {
-			http.Error(w, "Unauthorized", 401)
-			return
-		}
-		http.SetCookie(w, &http.Cookie{Name: "bifrost_session", Value: token, HttpOnly: true, Secure: *mode == "readonly", SameSite: http.SameSiteStrictMode, Path: "/"})
-		http.Redirect(w, r, "/latest", http.StatusSeeOther)
-	})
-	mux.HandleFunc("GET /latest", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, "web/dist/index.html") })
-	mux.Handle("GET /assets/", http.FileServer(http.Dir("web/dist")))
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/latest", 302) })
-	server := http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.EqualFold(r.Host, addr) {
-			http.Error(w, "Forbidden", 403)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	}), ReadHeaderTimeout: 5 * time.Second}
-	log.Printf("%s workspace: %s/latest", *mode, origin)
-	if *mode == "readonly" {
-		return server.ListenAndServeTLS(cert, keyFile)
+	api, err := workspace(ctx, pool, *mode, token, cfg.Origin)
+	if err != nil {
+		return err
+	}
+	server := http.Server{Addr: cfg.Addr, Handler: applicationHandler(api, token, cfg), ReadHeaderTimeout: 5 * time.Second}
+	log.Printf("%s workspace: %s/latest", *mode, cfg.Origin)
+	if cfg.Secure {
+		return server.ListenAndServeTLS(cfg.Cert, cfg.Key)
 	}
 	return server.ListenAndServe()
 }
