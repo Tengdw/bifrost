@@ -43,3 +43,40 @@ h2 {
 .ant-segmented {
   margin-bottom: 14px;
 }
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.controls label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 220px;
+}
+.account-form {
+  display: grid;
+  gap: 14px;
+}
+.account-form label {
+  display: grid;
+  gap: 6px;
+}
+.account-form input {
+  padding: 8px;
+}
+input {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.ant-table-wrapper {
+  max-width: 100%;
+}
+.controls label {
+  min-width: min(220px, 100%);
+}
+.ant-alert {
+  overflow-wrap: anywhere;
+}

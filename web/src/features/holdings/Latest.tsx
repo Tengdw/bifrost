@@ -1,3 +1,4 @@
+import { Positions } from "./Positions";
 import { useEffect, useState } from "react";
 import { Alert, Button, Segmented, Table } from "antd";
 import { latest, RequestError } from "../../api/snapshots";
@@ -32,15 +33,25 @@ function percentage(ratio: string | null) {
 type State =
   | { kind: "loading" | "login" | "error" | "empty" }
   | { kind: "ready"; data: Awaited<ReturnType<typeof latest>> };
-export function Latest() {
+export function Latest({
+  accountIds = [],
+  revision = 0,
+  managed = false,
+}: {
+  accountIds?: string[];
+  revision?: number;
+  managed?: boolean;
+}) {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [attempt, retry] = useState(0);
   const [mode, setMode] = useState("按钱包");
   useEffect(() => {
     const controller = new AbortController();
     setState({ kind: "loading" });
-    latest(controller.signal)
-      .then((data) => setState({ kind: "ready", data }))
+    latest(controller.signal, accountIds)
+      .then((data) => {
+        if (!controller.signal.aborted) setState({ kind: "ready", data });
+      })
       .catch((e: unknown) => {
         if (!controller.signal.aborted)
           setState({
@@ -53,7 +64,7 @@ export function Latest() {
           });
       });
     return () => controller.abort();
-  }, [attempt]);
+  }, [attempt, accountIds.join(","), revision]);
   if (state.kind === "login")
     return (
       <section>
@@ -95,7 +106,7 @@ export function Latest() {
   return (
     <>
       <p>
-        合成账号 · 观察时间{" "}
+        {managed ? "所选账号" : "合成账号"} · 观察时间{" "}
         {new Date(o.asOf).toLocaleString("zh-CN", {
           timeZone: "Asia/Shanghai",
           hour12: false,
@@ -164,6 +175,7 @@ export function Latest() {
           dataSource={items}
           locale={{ emptyText: "已确认空仓" }}
           columns={[
+            { title: "账号", dataIndex: "accountId" },
             { title: "资产", dataIndex: "asset" },
             { title: "数量", dataIndex: "quantity" },
             { title: "估值（USD）", dataIndex: "valueUsd", render: amount },
@@ -172,9 +184,31 @@ export function Latest() {
               dataIndex: "wallet",
               render: (k: string) => names[k],
             },
+            { title: "观察时间", dataIndex: "observedAt" },
+            {
+              title: "价格证据",
+              render: (_: unknown, row: (typeof items)[number]) =>
+                row.price
+                  ? row.price.priceUsd +
+                    " USD · " +
+                    row.price.source +
+                    " · " +
+                    row.price.pricedAt +
+                    " · " +
+                    row.price.path
+                  : row.coverage.reasons.join("；") || "—",
+            },
+            {
+              title: "组成",
+              render: (_: unknown, row: (typeof items)[number]) =>
+                Object.entries(row.components || {})
+                  .map(([k, v]) => k + ": " + v)
+                  .join("；"),
+            },
           ]}
         />
       </section>
+      {managed && <Positions accountIds={accountIds} batchId={o.batchId} />}
     </>
   );
 }

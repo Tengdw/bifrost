@@ -74,6 +74,10 @@ func (s Snapshot) coverage() Coverage {
 	return Coverage{"complete", []string{}, s.At, []string{s.Account}}
 }
 func (i Item) Value() *decimal.Decimal {
+	if i.Quantity.IsZero() {
+		v := decimal.Zero
+		return &v
+	}
 	if i.Price == nil {
 		return nil
 	}

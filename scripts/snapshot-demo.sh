@@ -12,7 +12,7 @@ trap cleanup EXIT
 "$pgbin/pg_ctl" -w -D "$tmp/data" -o "-h '' -k $tmp" -l "$tmp/server.log" start >/dev/null
 export BIFROST_DEMO_DATABASE_URL="postgres://bifrost@/postgres?host=$tmp"
 if [[ "$mode" == verify ]]; then
- BIFROST_TEST_DATABASE_URL="$BIFROST_DEMO_DATABASE_URL" go test -count=1 ./...
+ BIFROST_TEST_DATABASE_URL="$BIFROST_DEMO_DATABASE_URL" go test -count=1 ./cmd/... ./db/... ./internal/...
 else
  go run ./cmd/bifrost -seed "$mode"
  export BIFROST_DEMO_SESSION="$(openssl rand -hex 24)"

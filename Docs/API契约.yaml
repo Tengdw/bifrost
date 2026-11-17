@@ -9,6 +9,20 @@ servers:
 security:
 - dashboardSession: []
 paths:
+  "/capabilities":
+    get:
+      operationId: getCapabilities
+      summary: 返回当前受保护工作区的运行模式
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode: {type: string, enum: [snapshot, synthetic, readonly]}
   "/accounts":
     get:
       operationId: listAccounts
@@ -400,6 +414,10 @@ paths:
             format: uuid
         style: form
         explode: true
+      - name: batchId
+        in: query
+        description: 最近持仓总览的批次 ID，确保仓位来自同次观察。
+        schema: {type: string, format: uuid}
       - name: asOf
         in: query
         required: false
@@ -896,6 +914,15 @@ components:
         observedAt:
           type: string
           format: date-time
+        price:
+          type: object
+          description: 同批冻结的 USD 报价；无合格报价时不返回。
+          required: [priceUsd, source, pricedAt, path]
+          properties:
+            priceUsd: {"$ref": "#/components/schemas/Decimal"}
+            source: {type: string}
+            pricedAt: {type: string, format: date-time}
+            path: {type: string}
         components:
           type: object
           additionalProperties:
