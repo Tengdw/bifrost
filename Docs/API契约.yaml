@@ -189,7 +189,13 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/Problem"
-      description: allocation 与 assetClassAllocation 是同一组持仓的两种分布；每组分别与 totalUsd 对账，不能跨组求和。完整占比不可计算时 share=null；不完整时 totalUsd=null。
+      description: |
+        allocation 与 assetClassAllocation 是同批持仓的两种分组。完整时，每种分组分别与 totalUsd 对账，不能跨视图求和。
+        金额完整性逐组判断；若组合 totalUsd 为 null，所有分组的 share 均为 null，包括金额已知的分组。
+        例：资金钱包现金价值 800 USD，另有 2 股直接美股缺价，其他钱包确认空仓。
+        资金钱包 valueUsd=null、pricedSubtotalUsd="800"；其他钱包 valueUsd="0"。
+        按类别看，other 的 valueUsd="800"，us_equity 的 valueUsd=null，持仓明细仍保留 2 股。
+        此时组合 totalUsd=null、pricedSubtotalUsd="800"，两种分组均不显示占比。
   "/performance":
     get:
       operationId: getPerformance
@@ -337,6 +343,10 @@ paths:
         description: 与 wallet 取交集；查询资金美股用 wallet=funding 和 assetClass=us_equity。
         schema:
           "$ref": "#/components/schemas/AssetClass"
+      - name: batchId
+        in: query
+        description: 从最新总览打开明细时传回该总览的批次 ID；所有分页固定在同批，不回退到较早的有效观察。
+        schema: {type: string, format: uuid}
       - name: asOf
         in: query
         required: false
@@ -663,12 +673,15 @@ components:
       description: us_equity 仅表示已核验的 Funding 直接美股。other 为其余资产；bStocks 待验证，不单列、不折算为美股。
     AssetClassValue:
       type: object
-      required: [assetClass, valueUsd, share, coverage]
+      required: [assetClass, valueUsd, pricedSubtotalUsd, share, coverage]
       properties:
         assetClass:
           "$ref": "#/components/schemas/AssetClass"
         valueUsd:
           "$ref": "#/components/schemas/NullableDecimal"
+          description: 本类别完整 USD 金额；组内缺价时为 null，不受其他类别缺价影响。
+        pricedSubtotalUsd:
+          "$ref": "#/components/schemas/PricedSubtotalUsd"
         share:
           "$ref": "#/components/schemas/NullableDecimal"
         coverage:
@@ -678,6 +691,7 @@ components:
       required:
       - wallet
       - valueUsd
+      - pricedSubtotalUsd
       - share
       - coverage
       properties:
@@ -685,10 +699,16 @@ components:
           "$ref": "#/components/schemas/Wallet"
         valueUsd:
           "$ref": "#/components/schemas/NullableDecimal"
+          description: 本钱包完整 USD 金额；组内缺价时为 null，已确认空仓为十进制零。
+        pricedSubtotalUsd:
+          "$ref": "#/components/schemas/PricedSubtotalUsd"
         share:
           "$ref": "#/components/schemas/NullableDecimal"
         coverage:
           "$ref": "#/components/schemas/Coverage"
+    PricedSubtotalUsd:
+      "$ref": "#/components/schemas/NullableDecimal"
+      description: 同批已成功估值的持仓金额之和。全部缺价或无有效观察时为 null，已确认空仓为十进制零；有缺失时只作小计展示。
     AccountRow:
       type: object
       required:
@@ -717,6 +737,10 @@ components:
       - allocation
       - assetClassAllocation
       properties:
+        batchId:
+          type: string
+          format: uuid
+          description: latest 总览对应的不可变批次；查询同批持仓明细时使用。
         currency:
           type: string
           enum:
@@ -729,7 +753,7 @@ components:
         totalUsd:
           "$ref": "#/components/schemas/NullableDecimal"
         pricedSubtotalUsd:
-          "$ref": "#/components/schemas/NullableDecimal"
+          "$ref": "#/components/schemas/PricedSubtotalUsd"
         coverage:
           "$ref": "#/components/schemas/Coverage"
         accountRows:
