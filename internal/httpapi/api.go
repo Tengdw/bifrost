@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"bifrost/internal/holdings"
-	"bifrost/internal/postgres"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"log"
 	"net/http"
 	"net/url"
@@ -19,6 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bifrost/internal/holdings"
+	"bifrost/internal/postgres"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func write(w http.ResponseWriter, status int, body any) {
@@ -43,103 +45,127 @@ func New(store postgres.Store, token string) http.Handler {
 			problem(w, 405, "method")
 			return
 		}
-		overview := r.URL.Path == "/api/v1/overview"
-		if !overview && r.URL.Path != "/api/v1/holdings" {
+		switch r.URL.Path {
+		case "/api/v1/overview":
+			serveOverview(w, r, store)
+		case "/api/v1/holdings":
+			serveItems(w, r, store)
+		default:
 			problem(w, 404, "not_found")
+		}
+	})
+}
+func serveOverview(w http.ResponseWriter, r *http.Request, store postgres.Store) {
+	q := r.URL.Query()
+	for k := range q {
+		if k != "accountIds" && k != "basis" {
+			problem(w, 400, "invalid_overview_query")
 			return
 		}
-		q := r.URL.Query()
-		if overview && q.Get("basis") != "latest" {
-			if b := q.Get("basis"); b != "" && b != "day_close" {
-				problem(w, 400, "invalid_basis")
-			} else {
-				problem(w, 404, "no_day_close")
-			}
-			return
-		}
-		wallet, class := q.Get("wallet"), q.Get("assetClass")
-		if wallet != "" && !slices.Contains(holdings.WalletNames, wallet) || class != "" && class != "us_equity" && class != "other" {
-			problem(w, 400, "invalid_filter")
-			return
-		}
-		id := q.Get("batchId")
-		var at time.Time
-		if a := q.Get("asOf"); a != "" {
-			at, err = time.Parse(time.RFC3339Nano, a)
-			if err != nil {
-				problem(w, 400, "invalid_time")
-				return
-			}
-		}
-		limit := 50
-		if l := q.Get("limit"); l != "" {
-			limit, err = strconv.Atoi(l)
-			if err != nil || limit < 1 || limit > 200 {
-				problem(w, 400, "invalid_limit")
-				return
-			}
-		}
-		start := 0
-		if cur := q.Get("cursor"); cur != "" {
-			var valid bool
-			id, start, valid = decodeCursor(cur, q, id)
-			if !valid {
-				problem(w, 400, "invalid_cursor")
-				return
-			}
-		}
-		if id != "" {
-			var u pgtype.UUID
-			if err := u.Scan(id); err != nil {
-				problem(w, 400, "invalid_batch")
-				return
-			}
-		}
-		snap, err := store.Load(r.Context(), id, at)
-		if errors.Is(err, pgx.ErrNoRows) {
-			problem(w, 404, "no_snapshot")
-			return
-		}
+	}
+	switch q.Get("basis") {
+	case "latest":
+	case "", "day_close":
+		problem(w, 404, "no_day_close")
+		return
+	default:
+		problem(w, 400, "invalid_basis")
+		return
+	}
+	snap, ok := readSnapshot(w, r, store, "", time.Time{})
+	if ok {
+		write(w, 200, holdings.Summarize(snap))
+	}
+}
+func serveItems(w http.ResponseWriter, r *http.Request, store postgres.Store) {
+	q := r.URL.Query()
+	var err error
+	wallet, class := q.Get("wallet"), q.Get("assetClass")
+	if wallet != "" && !slices.Contains(holdings.WalletNames, wallet) || class != "" && class != "us_equity" && class != "other" {
+		problem(w, 400, "invalid_filter")
+		return
+	}
+	id := q.Get("batchId")
+	var at time.Time
+	if a := q.Get("asOf"); a != "" {
+		at, err = time.Parse(time.RFC3339Nano, a)
 		if err != nil {
-			log.Print("snapshot read failed")
-			problem(w, 503, "read_failed")
+			problem(w, 400, "invalid_time")
 			return
 		}
-		for _, account := range q["accountIds"] {
-			if account != snap.Account {
-				problem(w, 404, "unknown_account")
-				return
-			}
-		}
-		if overview {
-			write(w, 200, holdings.Summarize(snap))
+	}
+	limit := 50
+	if l := q.Get("limit"); l != "" {
+		limit, err = strconv.Atoi(l)
+		if err != nil || limit < 1 || limit > 200 {
+			problem(w, 400, "invalid_limit")
 			return
 		}
-		rows := make([]map[string]any, 0, len(snap.Items))
-		for _, i := range snap.Items {
-			if wallet != "" && wallet != i.Wallet || class != "" && class != i.Class {
-				continue
-			}
-			quality := "complete"
-			reasons := []string{}
-			if i.Price == nil {
-				quality = "unpriced"
-				reasons = append(reasons, i.MissingReason())
-			}
-			rows = append(rows, map[string]any{"accountId": snap.Account, "wallet": i.Wallet, "itemKey": i.Key, "asset": i.Asset, "assetClass": i.Class, "underlyingSymbol": i.Symbol, "quantity": i.Quantity, "valueUsd": i.Value(), "observedAt": snap.At, "components": map[string]string{}, "coverage": holdings.Coverage{Quality: quality, Reasons: reasons, AsOf: snap.At, Accounts: []string{snap.Account}}})
-		}
-		if start > len(rows) {
+	}
+	start := 0
+	if cur := q.Get("cursor"); cur != "" {
+		var valid bool
+		id, start, valid = decodeCursor(cur, q, id)
+		if !valid {
 			problem(w, 400, "invalid_cursor")
 			return
 		}
-		end := start + min(limit, len(rows)-start)
-		var next *string
-		if end < len(rows) {
-			v := encodeCursor(snap.ID, end, q)
-			next = &v
+	}
+	if id != "" {
+		var u pgtype.UUID
+		if err := u.Scan(id); err != nil {
+			problem(w, 400, "invalid_batch")
+			return
 		}
-		write(w, 200, map[string]any{"items": rows[start:end], "nextCursor": next})
-	})
+	}
+	snap, ok := readSnapshot(w, r, store, id, at)
+	if !ok {
+		return
+	}
+	rows := make([]map[string]any, 0, len(snap.Items))
+	for _, i := range snap.Items {
+		if wallet != "" && wallet != i.Wallet || class != "" && class != i.Class {
+			continue
+		}
+		quality := "complete"
+		reasons := []string{}
+		if i.Price == nil {
+			quality = "unpriced"
+			reasons = append(reasons, i.MissingReason())
+		}
+		rows = append(rows, map[string]any{"accountId": snap.Account, "wallet": i.Wallet, "itemKey": i.Key, "asset": i.Asset, "assetClass": i.Class, "underlyingSymbol": i.Symbol, "quantity": i.Quantity, "valueUsd": i.Value(), "observedAt": snap.At, "components": map[string]string{}, "coverage": holdings.Coverage{Quality: quality, Reasons: reasons, AsOf: snap.At, Accounts: []string{snap.Account}}})
+	}
+	if start > len(rows) {
+		problem(w, 400, "invalid_cursor")
+		return
+	}
+	end := start + min(limit, len(rows)-start)
+	var next *string
+	if end < len(rows) {
+		v := encodeCursor(snap.ID, end, q)
+		next = &v
+	}
+	write(w, 200, map[string]any{"items": rows[start:end], "nextCursor": next})
+}
+func readSnapshot(w http.ResponseWriter, r *http.Request, store postgres.Store, id string, at time.Time) (holdings.Snapshot, bool) {
+	snap, err := store.Load(r.Context(), id, at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, 404, "no_snapshot")
+		return snap, false
+	}
+	if err != nil {
+		log.Printf("snapshot read failed: %v", err)
+		problem(w, 503, "read_failed")
+		return snap, false
+	}
+	for _, account := range r.URL.Query()["accountIds"] {
+		if account != snap.Account {
+			problem(w, 404, "unknown_account")
+			return snap, false
+		}
+	}
+
+	return snap, true
 }
 func filterKey(q url.Values) string {
 	copyQ := url.Values{}

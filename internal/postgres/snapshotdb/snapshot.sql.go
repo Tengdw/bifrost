@@ -174,16 +174,17 @@ func (q *Queries) ListWallets(ctx context.Context, arg ListWalletsParams) ([]str
 }
 
 const loadBatch = `-- name: LoadBatch :one
-SELECT id,account_id,observed_at FROM bifrost.batches WHERE ($1::uuid IS NULL OR id=$1) AND ($2::timestamptz IS NULL OR observed_at<=$2) ORDER BY observed_at DESC,id DESC LIMIT 1
+SELECT id,account_id,observed_at FROM bifrost.batches WHERE account_id=$1 AND ($2::uuid IS NULL OR id=$2) AND ($3::timestamptz IS NULL OR observed_at<=$3) ORDER BY observed_at DESC,id DESC LIMIT 1
 `
 
 type LoadBatchParams struct {
-	Batch pgtype.UUID
-	AsOf  pgtype.Timestamptz
+	AccountID pgtype.UUID
+	Batch     pgtype.UUID
+	AsOf      pgtype.Timestamptz
 }
 
 func (q *Queries) LoadBatch(ctx context.Context, arg LoadBatchParams) (BifrostBatch, error) {
-	row := q.db.QueryRow(ctx, loadBatch, arg.Batch, arg.AsOf)
+	row := q.db.QueryRow(ctx, loadBatch, arg.AccountID, arg.Batch, arg.AsOf)
 	var i BifrostBatch
 	err := row.Scan(&i.ID, &i.AccountID, &i.ObservedAt)
 	return i, err

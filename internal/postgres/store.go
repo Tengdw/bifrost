@@ -1,15 +1,19 @@
 package postgres
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/jackc/pgx/v5/pgconn"
+	"time"
+
 	"bifrost/internal/holdings"
 	"bifrost/internal/postgres/snapshotdb"
-	"context"
-	"fmt"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
-	"time"
 )
 
 type Store struct{ Pool *pgxpool.Pool }
@@ -66,6 +70,18 @@ func (s Store) SeedExample(ctx context.Context, missing bool) error {
 		return nil
 	})
 }
+
+// readError 只公开操作及错误类别，连接串、SQL 参数及账户详情不写日志。
+func readError(op string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%s: %w", op, pgx.ErrNoRows)
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return fmt.Errorf("%s: SQLSTATE %s", op, pgErr.Code)
+	}
+	return fmt.Errorf("%s: %T", op, err)
+}
 func (s Store) Load(ctx context.Context, id string, at time.Time) (holdings.Snapshot, error) {
 	var snap holdings.Snapshot
 	var batch pgtype.UUID
@@ -74,21 +90,25 @@ func (s Store) Load(ctx context.Context, id string, at time.Time) (holdings.Snap
 			return snap, err
 		}
 	}
-	q := snapshotdb.New(s.Pool)
-	b, err := q.LoadBatch(ctx, snapshotdb.LoadBatchParams{Batch: batch, AsOf: timestamp(at)})
-	if err != nil {
+	var account pgtype.UUID
+	if err := account.Scan(holdings.ExampleAccount); err != nil {
 		return snap, err
+	}
+	q := snapshotdb.New(s.Pool)
+	b, err := q.LoadBatch(ctx, snapshotdb.LoadBatchParams{AccountID: account, Batch: batch, AsOf: timestamp(at)})
+	if err != nil {
+		return snap, readError("load batch", err)
 	}
 	snap.ID = b.ID.String()
 	snap.Account = b.AccountID.String()
 	snap.At = b.ObservedAt.Time.UTC()
 	snap.Wallets, err = q.ListWallets(ctx, snapshotdb.ListWalletsParams{BatchID: b.ID, AccountID: b.AccountID})
 	if err != nil {
-		return snap, err
+		return snap, readError("load observed wallets", err)
 	}
 	rows, err := q.ListItems(ctx, snapshotdb.ListItemsParams{BatchID: b.ID, AccountID: b.AccountID})
 	if err != nil {
-		return snap, err
+		return snap, readError("load holdings", err)
 	}
 	for _, r := range rows {
 		quantity, err := decimal.NewFromString(r.QuantityText)

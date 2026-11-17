@@ -47,7 +47,7 @@ export function Latest() {
             kind:
               e instanceof RequestError && e.status === 401
                 ? "login"
-                : e instanceof RequestError && e.status === 404
+                : e instanceof RequestError && e.missingSnapshot
                   ? "empty"
                   : "error",
           });
@@ -144,7 +144,9 @@ export function Latest() {
               dataIndex: "pricedSubtotalUsd",
               render: amount,
             },
-            { title: "占比", dataIndex: "share", render: percentage },
+            ...(groups.some((g) => g.share !== null)
+              ? [{ title: "占比", dataIndex: "share", render: percentage }]
+              : []),
             {
               title: "说明",
               render: (_: unknown, r: Group) =>

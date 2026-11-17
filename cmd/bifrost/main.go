@@ -1,19 +1,21 @@
 package main
 
 import (
-	"bifrost/db/migrations"
-	"bifrost/internal/httpapi"
-	"bifrost/internal/postgres"
 	"context"
 	"crypto/subtle"
 	"flag"
 	"fmt"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"bifrost/db/migrations"
+	"bifrost/internal/httpapi"
+	"bifrost/internal/postgres"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {

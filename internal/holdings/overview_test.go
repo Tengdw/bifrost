@@ -1,8 +1,9 @@
 package holdings
 
 import (
-	"github.com/shopspring/decimal"
 	"testing"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestCompleteFunding(t *testing.T) {

@@ -1,9 +1,10 @@
 package holdings
 
 import (
-	"github.com/shopspring/decimal"
 	"slices"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // Snapshot 仅包含同一账号、同一批次的已观察钱包。

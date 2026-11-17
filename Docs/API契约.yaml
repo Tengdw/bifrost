@@ -740,7 +740,7 @@ components:
         batchId:
           type: string
           format: uuid
-          description: latest 总览对应的不可变批次；查询同批持仓明细时使用。
+          description: basis=latest 成功响应必须包含此不可变批次 ID；明细和分页使用该值。
         currency:
           type: string
           enum:

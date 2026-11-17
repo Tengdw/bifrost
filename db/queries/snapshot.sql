@@ -8,7 +8,7 @@ INSERT INTO bifrost.wallet_runs (batch_id,account_id,wallet) VALUES ($1,$2,$3) R
 INSERT INTO bifrost.holdings (run_id,item_key,asset,asset_class,underlying_symbol,quantity,price_usd,usd_value,price_source,priced_at)
 VALUES ($1,$2,$3,$4,$5,sqlc.arg(quantity_text)::text::numeric,sqlc.narg(price_text)::text::numeric,sqlc.narg(value_text)::text::numeric,$6,$7);
 -- name: LoadBatch :one
-SELECT id,account_id,observed_at FROM bifrost.batches WHERE (sqlc.narg(batch)::uuid IS NULL OR id=sqlc.narg(batch)) AND (sqlc.narg(as_of)::timestamptz IS NULL OR observed_at<=sqlc.narg(as_of)) ORDER BY observed_at DESC,id DESC LIMIT 1;
+SELECT id,account_id,observed_at FROM bifrost.batches WHERE account_id=sqlc.arg(account_id) AND (sqlc.narg(batch)::uuid IS NULL OR id=sqlc.narg(batch)) AND (sqlc.narg(as_of)::timestamptz IS NULL OR observed_at<=sqlc.narg(as_of)) ORDER BY observed_at DESC,id DESC LIMIT 1;
 -- name: ListWallets :many
 SELECT wallet FROM bifrost.wallet_runs WHERE batch_id=$1 AND account_id=$2 ORDER BY wallet;
 -- name: ListItems :many

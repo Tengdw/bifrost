@@ -1,16 +1,18 @@
 package httpapi_test
 
 import (
-	"bifrost/db/migrations"
-	"bifrost/internal/httpapi"
-	"bifrost/internal/postgres"
 	"context"
 	"encoding/json"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+
+	"bifrost/db/migrations"
+	"bifrost/internal/httpapi"
+	"bifrost/internal/postgres"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestPersistedOverview(t *testing.T) {
@@ -71,5 +73,16 @@ func TestPersistedOverview(t *testing.T) {
 		if !ok || v != tc.value || row["asset"] != "EQ_MU" || row["quantity"] != "2" {
 			t.Fatal(row)
 		}
+	}
+}
+
+// 验证只读总览不能被明细参数回拨到已经过期的完整批次。
+func TestOverviewRejectsPinnedBatch(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/v1/overview?basis=latest&batchId=00000000-0000-4000-8000-000000000010", nil)
+	r.AddCookie(&http.Cookie{Name: "bifrost_session", Value: "test"})
+	w := httptest.NewRecorder()
+	httpapi.New(postgres.Store{}, "test").ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Fatalf("got %d, expected invalid latest query", w.Code)
 	}
 }
