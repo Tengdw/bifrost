@@ -1,0 +1,6 @@
+{
+  "name":"bifrost-dashboard-preview","private":true,"type":"module",
+  "scripts":{"dev":"vite","build":"tsc --noEmit && vite build"},
+  "dependencies":{"antd":"^5.27.0","echarts":"^6.0.0","react":"^19.1.0","react-dom":"^19.1.0"},
+  "devDependencies":{"@types/react":"^19.1.0","@types/react-dom":"^19.1.0","typescript":"~5.9.0","vite":"^6.4.0","vite-plugin-singlefile":"^2.3.0"}
+}

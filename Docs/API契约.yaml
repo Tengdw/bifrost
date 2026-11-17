@@ -1,0 +1,1096 @@
+---
+openapi: 3.1.0
+info:
+  title: Bifrost 资产统计看板
+  version: 0.2.0
+  description: 首版实施契约，尚未部署。USD；Asia/Shanghai 日界线；缺失值为 null，不能用 0 替代。浏览器仅通过受保护的同源入口访问。
+servers:
+- url: "/api/v1"
+security:
+- dashboardSession: []
+paths:
+  "/accounts":
+    get:
+      operationId: listAccounts
+      summary: 列出已接入账号（含停用）
+      parameters: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/Account"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+    post:
+      operationId: addAccount
+      summary: 验证币安身份并接入只读账号
+      parameters: []
+      responses:
+        '201':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Account"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - alias
+              - apiKey
+              - apiSecret
+              properties:
+                alias:
+                  type: string
+                apiKey:
+                  type: string
+                  writeOnly: true
+                  minLength: 1
+                apiSecret:
+                  type: string
+                  writeOnly: true
+                  minLength: 1
+  "/accounts/{id}":
+    patch:
+      operationId: updateAccount
+      summary: 修改别名或停用账号并保留历史
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: 内部账号 ID。
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Account"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                alias:
+                  type: string
+                enabled:
+                  const: false
+  "/accounts/{id}/credentials":
+    put:
+      operationId: rotateCredentials
+      summary: 轮换同一交易所身份的凭据
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: 内部账号 ID。
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Account"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - apiKey
+              - apiSecret
+              properties:
+                apiKey:
+                  type: string
+                  writeOnly: true
+                  minLength: 1
+                apiSecret:
+                  type: string
+                  writeOnly: true
+                  minLength: 1
+  "/overview":
+    get:
+      operationId: getOverview
+      summary: 当前权益、账号矩阵及按钱包与资产类别的分布
+      parameters:
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      - name: basis
+        in: query
+        required: false
+        description: 看板主卡与环图共用最近日终；latest 供查看最新采集。
+        schema:
+          type: string
+          enum:
+          - day_close
+          - latest
+          default: day_close
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Overview"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+      description: allocation 与 assetClassAllocation 是同一组持仓的两种分布；每组分别与 totalUsd 对账，不能跨组求和。完整占比不可计算时 share=null；不完整时 totalUsd=null。
+  "/performance":
+    get:
+      operationId: getPerformance
+      summary: 过去 7/30/90 个完整自然日的折线与区间摘要
+      parameters:
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      - name: days
+        in: query
+        required: false
+        description: 截至最近已结束的北京时间自然日。
+        schema:
+          type: integer
+          enum:
+          - 7
+          - 30
+          - 90
+          default: 30
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Window"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+  "/calendar":
+    get:
+      operationId: getCalendar
+      summary: 选定月份各自然日及已记录日小计
+      parameters:
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      - name: month
+        in: query
+        required: true
+        description: YYYY-MM，含未记录日期；按指标分别统计有效日。
+        schema:
+          type: string
+          pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$"
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Calendar"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+  "/calendar/{date}":
+    get:
+      operationId: getDay
+      summary: 日历点击明细；口径与曲线同日点相同
+      parameters:
+      - name: date
+        in: path
+        required: true
+        description: 北京时间自然日。
+        schema:
+          type: string
+          format: date
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Daily"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+  "/holdings":
+    get:
+      operationId: listHoldings
+      summary: 查看当前或历史原币持仓、产品及估值
+      parameters:
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      - name: wallet
+        in: query
+        required: false
+        description: 钱包筛选。
+        schema:
+          "$ref": "#/components/schemas/Wallet"
+      - name: assetClass
+        in: query
+        description: 与 wallet 取交集；查询资金美股用 wallet=funding 和 assetClass=us_equity。
+        schema:
+          "$ref": "#/components/schemas/AssetClass"
+      - name: asOf
+        in: query
+        required: false
+        description: 取此时或之前最近一次有效观察，返回实际 observedAt。
+        schema:
+          type: string
+          format: date-time
+      - name: cursor
+        in: query
+        required: false
+        description: 前页返回的游标，绑定筛选条件。
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        description: 单页数量。
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HoldingPage"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+  "/positions":
+    get:
+      operationId: listPositions
+      summary: 查看普通 U 本位合约仓位，不计入持仓总额
+      parameters:
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      - name: asOf
+        in: query
+        required: false
+        description: 取此时或之前最近一次有效观察，返回实际 observedAt。
+        schema:
+          type: string
+          format: date-time
+      - name: cursor
+        in: query
+        required: false
+        description: 前页返回的游标，绑定筛选条件。
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        description: 单页数量。
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PositionPage"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+  "/ledger":
+    get:
+      operationId: listEvents
+      summary: 查询资金流水
+      parameters:
+      - name: accountIds
+        in: query
+        required: false
+        description: 重复参数选择多个账号；省略为查询时段内的全部跟踪账号。
+        schema:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        style: form
+        explode: true
+      - name: wallet
+        in: query
+        required: false
+        description: 钱包筛选。
+        schema:
+          "$ref": "#/components/schemas/Wallet"
+      - name: asset
+        in: query
+        required: false
+        description: 币种
+        schema:
+          type: string
+      - name: kind
+        in: query
+        required: false
+        description: 如 deposit、withdrawal、transfer、reward、funding_fee。
+        schema:
+          type: string
+      - name: from
+        in: query
+        required: false
+        description: 包含此时刻。
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        description: 不包含此时刻。
+        schema:
+          type: string
+          format: date-time
+      - name: cursor
+        in: query
+        required: false
+        description: 前页返回的游标，绑定筛选条件。
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        description: 单页数量。
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/EventPage"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+      description: 按 eventAt、id 倒序；游标分页。
+  "/refresh":
+    post:
+      operationId: requestRefresh
+      summary: 发起手动刷新；重复请求复用在途任务
+      parameters: []
+      responses:
+        '202':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/SyncItem"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+      description: 省略 wallets 表示四类钱包。每个账号/钱包分别返回 batchId 和状态。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - accountIds
+              properties:
+                accountIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  minItems: 1
+                  uniqueItems: true
+                wallets:
+                  type: array
+                  items:
+                    "$ref": "#/components/schemas/Wallet"
+                  minItems: 1
+                  uniqueItems: true
+  "/sync/{batchId}":
+    get:
+      operationId: getSync
+      summary: 查看批次的各钱包进度
+      parameters:
+      - name: batchId
+        in: path
+        required: true
+        description: 刷新返回的批次 ID。
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  "$ref": "#/components/schemas/SyncStatus"
+        default:
+          description: 400 参数无效；401/403 未授权；404 未找到；409 身份冲突；503 服务不可用。
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Problem"
+components:
+  securitySchemes:
+    dashboardSession:
+      type: apiKey
+      in: cookie
+      name: bifrost_session
+      description: 受保护入口签发和校验的 HttpOnly 会话；不是币安凭据。
+  schemas:
+    Decimal:
+      type: string
+      pattern: "^-?[0-9]+(\\.[0-9]+)?$"
+      description: 十进制字符串；比率用小数，0.01 表示 1%。
+    NullableDecimal:
+      anyOf:
+      - "$ref": "#/components/schemas/Decimal"
+      - type: 'null'
+    Wallet:
+      type: string
+      enum:
+      - spot
+      - funding
+      - earn
+      - usdm
+    Quality:
+      type: string
+      enum:
+      - complete
+      - partial
+      - stale
+      - unpriced
+      - unavailable
+      - not_open
+      - out_of_scope
+    Coverage:
+      type: object
+      required:
+      - quality
+      - reasons
+      - asOf
+      - comparableAccountIds
+      properties:
+        quality:
+          "$ref": "#/components/schemas/Quality"
+        reasons:
+          type: array
+          items:
+            type: string
+        asOf:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        comparableAccountIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    Account:
+      type: object
+      required:
+      - id
+      - alias
+      - exchange
+      - enabledFrom
+      - disabledAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        alias:
+          type: string
+        exchange:
+          type: string
+          enum:
+          - binance
+        enabledFrom:
+          type: string
+          format: date-time
+        disabledAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+    AssetClass:
+      type: string
+      enum: [us_equity, other]
+      description: us_equity 仅表示已核验的 Funding 直接美股。other 为其余资产；bStocks 待验证，不单列、不折算为美股。
+    AssetClassValue:
+      type: object
+      required: [assetClass, valueUsd, share, coverage]
+      properties:
+        assetClass:
+          "$ref": "#/components/schemas/AssetClass"
+        valueUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        share:
+          "$ref": "#/components/schemas/NullableDecimal"
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+    WalletValue:
+      type: object
+      required:
+      - wallet
+      - valueUsd
+      - share
+      - coverage
+      properties:
+        wallet:
+          "$ref": "#/components/schemas/Wallet"
+        valueUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        share:
+          "$ref": "#/components/schemas/NullableDecimal"
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+    AccountRow:
+      type: object
+      required:
+      - accountId
+      - totalUsd
+      - wallets
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        totalUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        wallets:
+          type: array
+          items:
+            "$ref": "#/components/schemas/WalletValue"
+    Overview:
+      type: object
+      required:
+      - currency
+      - asOf
+      - totalUsd
+      - pricedSubtotalUsd
+      - coverage
+      - accountRows
+      - allocation
+      - assetClassAllocation
+      properties:
+        currency:
+          type: string
+          enum:
+          - USD
+        asOf:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        totalUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        pricedSubtotalUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+        accountRows:
+          type: array
+          items:
+            "$ref": "#/components/schemas/AccountRow"
+        assetClassAllocation:
+          type: array
+          description: 按同批持仓的资产类别互斥分组，美股只在 us_equity 组出现。
+          items:
+            "$ref": "#/components/schemas/AssetClassValue"
+        allocation:
+          description: 按钱包互斥分组，funding 已包含直接美股的价值。
+          type: array
+          items:
+            "$ref": "#/components/schemas/WalletValue"
+    Daily:
+      type: object
+      required:
+      - date
+      - openingUsd
+      - closingUsd
+      - assetChangeUsd
+      - netFlowUsd
+      - pnlUsd
+      - returnRate
+      - coverage
+      - returnMissingReason
+      properties:
+        date:
+          type: string
+          format: date
+        openingUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        closingUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        assetChangeUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        netFlowUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        pnlUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        returnRate:
+          "$ref": "#/components/schemas/NullableDecimal"
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+        returnMissingReason:
+          type:
+          - string
+          - 'null'
+    Window:
+      type: object
+      required:
+      - from
+      - to
+      - days
+      - pnlUsd
+      - netFlowUsd
+      - returnRate
+      - coverage
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        days:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Daily"
+        pnlUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        netFlowUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        returnRate:
+          "$ref": "#/components/schemas/NullableDecimal"
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+    Calendar:
+      type: object
+      required:
+      - month
+      - days
+      - recordedPnlSumUsd
+      - recordedChangeSumUsd
+      - pnlDays
+      - changeDays
+      - coverage
+      properties:
+        month:
+          type: string
+        days:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Daily"
+        recordedPnlSumUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        recordedChangeSumUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        pnlDays:
+          type: integer
+        changeDays:
+          type: integer
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+    Holding:
+      type: object
+      required:
+      - accountId
+      - wallet
+      - itemKey
+      - asset
+      - assetClass
+      - underlyingSymbol
+      - quantity
+      - valueUsd
+      - observedAt
+      - components
+      - coverage
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        wallet:
+          "$ref": "#/components/schemas/Wallet"
+        itemKey:
+          type: string
+        asset:
+          type: string
+        assetClass:
+          "$ref": "#/components/schemas/AssetClass"
+        underlyingSymbol:
+          type: [string, 'null']
+          description: 已核验的直接美股返回标的代码，如 MU；asset 保留 EQ_MU，其余持仓此字段为 null。
+        quantity:
+          "$ref": "#/components/schemas/Decimal"
+        valueUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        observedAt:
+          type: string
+          format: date-time
+        components:
+          type: object
+          additionalProperties:
+            type: string
+        coverage:
+          "$ref": "#/components/schemas/Coverage"
+    Position:
+      type: object
+      required:
+      - accountId
+      - observedAt
+      - symbol
+      - side
+      - quantity
+      - marginAsset
+      - entryPrice
+      - markPrice
+      - unrealized
+      - notional
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        observedAt:
+          type: string
+          format: date-time
+        symbol:
+          type: string
+        side:
+          type: string
+        quantity:
+          "$ref": "#/components/schemas/Decimal"
+        marginAsset:
+          type: string
+        entryPrice:
+          "$ref": "#/components/schemas/Decimal"
+        markPrice:
+          "$ref": "#/components/schemas/Decimal"
+        unrealized:
+          "$ref": "#/components/schemas/Decimal"
+        notional:
+          "$ref": "#/components/schemas/Decimal"
+    Event:
+      type: object
+      required:
+      - id
+      - accountId
+      - wallet
+      - asset
+      - quantity
+      - feeAsset
+      - fee
+      - principalUsd
+      - eventAt
+      - settledAt
+      - kind
+      - state
+      - sourceKey
+      - from
+      - to
+      - matchState
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        wallet:
+          "$ref": "#/components/schemas/Wallet"
+        asset:
+          type: string
+        quantity:
+          "$ref": "#/components/schemas/Decimal"
+        feeAsset:
+          type:
+          - string
+          - 'null'
+        fee:
+          "$ref": "#/components/schemas/NullableDecimal"
+        principalUsd:
+          "$ref": "#/components/schemas/NullableDecimal"
+        eventAt:
+          type: string
+          format: date-time
+        settledAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        kind:
+          type: string
+        state:
+          type: string
+        sourceKey:
+          type: string
+        from:
+          type:
+          - string
+          - 'null'
+        to:
+          type:
+          - string
+          - 'null'
+        matchState:
+          type: string
+          enum:
+          - matched
+          - pending
+          - not_applicable
+    SyncItem:
+      type: object
+      required:
+      - batchId
+      - accountId
+      - wallet
+      - state
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        wallet:
+          "$ref": "#/components/schemas/Wallet"
+        state:
+          type: string
+          enum:
+          - started
+          - already_running
+    SyncStatus:
+      type: object
+      required:
+      - batchId
+      - accountId
+      - wallet
+      - state
+      - lastSuccessAt
+      - reason
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        wallet:
+          "$ref": "#/components/schemas/Wallet"
+        state:
+          type: string
+          enum:
+          - running
+          - succeeded
+          - partial
+          - failed
+          - interrupted
+          - skipped
+        lastSuccessAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+        reason:
+          type:
+          - string
+          - 'null'
+    Problem:
+      type: object
+      required:
+      - code
+      - message
+      - requestId
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+    EventPage:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Event"
+        nextCursor:
+          type:
+          - string
+          - 'null'
+    HoldingPage:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Holding"
+        nextCursor:
+          type:
+          - string
+          - 'null'
+    PositionPage:
+      type: object
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          items:
+            "$ref": "#/components/schemas/Position"
+        nextCursor:
+          type:
+          - string
+          - 'null'
