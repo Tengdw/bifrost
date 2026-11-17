@@ -3,12 +3,12 @@ module bifrost
 go 1.25.7
 
 require (
+	github.com/binance/binance-connector-go v0.8.0
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/shopspring/decimal v1.4.0
 )
 
 require (
-	github.com/binance/binance-connector-go v0.8.0 // indirect
 	github.com/bitly/go-simplejson v0.5.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

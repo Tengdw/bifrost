@@ -23,7 +23,9 @@ function App() {
             data &&
             typeof data === "object" &&
             "mode" in data &&
-            (data.mode === "readonly" || data.mode === "synthetic")
+            (data.mode === "readonly" ||
+              data.mode === "synthetic" ||
+              data.mode === "snapshot")
           )
             setMode(data.mode);
           else setMode("error");

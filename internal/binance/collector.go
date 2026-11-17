@@ -2,8 +2,10 @@ package binance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +32,7 @@ type Result struct {
 	Positions  []Position
 	Quotes     map[string]Quote
 	Components map[string]map[string]string
+	blocked    map[string]bool
 	Mode       string
 }
 type Position struct {
@@ -48,7 +51,7 @@ func (c Collector) Collect(ctx context.Context, wallet string) (Result, error) {
 	if c.Now != nil {
 		now = c.Now()
 	}
-	r := Result{ObservedAt: now, Complete: true, Reasons: []string{}, Items: []holdings.Item{}, Positions: []Position{}, Quotes: map[string]Quote{}, Components: map[string]map[string]string{}}
+	r := Result{ObservedAt: now, Complete: true, Reasons: []string{}, Items: []holdings.Item{}, Positions: []Position{}, Quotes: map[string]Quote{}, Components: map[string]map[string]string{}, blocked: map[string]bool{}}
 	var err error
 	switch wallet {
 	case "spot":
@@ -68,7 +71,7 @@ func (c Collector) Collect(ctx context.Context, wallet string) (Result, error) {
 	}
 	for j := range r.Items {
 		i := &r.Items[j]
-		if i.Quantity.IsZero() {
+		if r.blocked[i.Key] || i.Quantity.IsZero() {
 			continue
 		}
 		quote, ok := c.Prices.Resolve(i.Asset, i.Class, r.ObservedAt)
@@ -93,8 +96,19 @@ func (r *Result) item(wallet, key, asset, class, qty string) error {
 	if err != nil {
 		return fmt.Errorf("invalid %s quantity", wallet)
 	}
+	if n.IsZero() {
+		return nil
+	}
 	r.Items = append(r.Items, holdings.Item{Wallet: wallet, Key: key, Asset: asset, Class: class, Quantity: n})
 	return nil
+}
+func (r *Result) block(key, reason string) {
+	r.blocked[key] = true
+	r.incomplete(reason)
+	if r.Components[key] == nil {
+		r.Components[key] = map[string]string{}
+	}
+	r.Components[key]["valuationBlockedReason"] = reason
 }
 func num(s string) (decimal.Decimal, error) {
 	if s == "" {
@@ -130,6 +144,25 @@ func (c Collector) spot(ctx context.Context, r *Result) error {
 		}
 		r.Components[b.Asset] = map[string]string{"free": b.Free, "locked": b.Locked}
 	}
+	return nil
+}
+
+// positionID 不经过 float64，保留交易所的长整数原文。
+type positionID string
+
+func (p *positionID) UnmarshalJSON(raw []byte) error {
+	var value string
+	if len(raw) > 0 && raw[0] == '"' {
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+	} else {
+		value = string(raw)
+	}
+	if !regexp.MustCompile(`^[0-9]+$`).MatchString(value) {
+		return fmt.Errorf("invalid position ID")
+	}
+	*p = positionID(value)
 	return nil
 }
 
@@ -186,13 +219,16 @@ func (c Collector) funding(ctx context.Context, r *Result) error {
 					return e
 				}
 				stocks[a.Asset] = q
+				if a.Freeze == "" || a.Withdrawing == "" {
+					r.block(a.Asset, "股票冻结或在途字段缺失")
+				}
 				for _, v := range []string{a.Freeze, a.Withdrawing} {
 					n, e := num(v)
 					if e != nil {
 						return e
 					}
 					if !n.IsZero() {
-						r.incomplete(a.Asset + " 股票冻结或在途待对账")
+						r.block(a.Asset, a.Asset+" 股票冻结或在途待对账")
 					}
 				}
 			}
@@ -206,14 +242,23 @@ func (c Collector) funding(ctx context.Context, r *Result) error {
 		if e != nil {
 			return e
 		}
-		r.Components[b.Asset] = map[string]string{"free": b.Free, "locked": b.Locked, "freeze": b.Freeze, "withdrawing": b.Withdrawing}
+		if r.Components[b.Asset] == nil {
+			r.Components[b.Asset] = map[string]string{}
+		}
+		r.Components[b.Asset]["free"] = b.Free
+		r.Components[b.Asset]["locked"] = b.Locked
+		r.Components[b.Asset]["freeze"] = b.Freeze
+		r.Components[b.Asset]["withdrawing"] = b.Withdrawing
+		if b.Freeze == "" || b.Withdrawing == "" {
+			r.block(b.Asset, "资金冻结或在途字段缺失")
+		}
 		for _, v := range []string{b.Freeze, b.Withdrawing} {
 			n, e := num(v)
 			if e != nil {
 				return e
 			}
 			if !n.IsZero() {
-				r.incomplete(b.Asset + " 冻结或在途余额待对账")
+				r.block(b.Asset, b.Asset+" 冻结或在途余额待对账")
 			}
 		}
 		if stock, ok := stocks[b.Asset]; ok {
@@ -221,12 +266,12 @@ func (c Collector) funding(ctx context.Context, r *Result) error {
 			if e != nil {
 				return e
 			}
-			b, e := num(q)
+			otherQuantity, e := num(q)
 			if e != nil {
 				return e
 			}
-			if !a.Equal(b) {
-				r.incomplete("股票双来源数量不一致")
+			if !a.Equal(otherQuantity) {
+				r.block(b.Asset, "股票双来源数量不一致")
 			}
 			continue
 		}
@@ -234,7 +279,7 @@ func (c Collector) funding(ctx context.Context, r *Result) error {
 			r.incomplete(b.Asset + " bStocks 待验证")
 		}
 		if strings.HasPrefix(b.Asset, "EQ_") {
-			r.incomplete(b.Asset + " 股票钱包归属待核对")
+			r.block(b.Asset, b.Asset+" 股票钱包归属待核对")
 		}
 		if e = r.item("funding", b.Asset, b.Asset, "other", q); e != nil {
 			return e
@@ -246,12 +291,12 @@ func (c Collector) funding(ctx context.Context, r *Result) error {
 		if known[symbol] {
 			class = "us_equity"
 		} else {
-			r.incomplete(asset + " 股票目录不匹配")
+			r.block(asset, asset+" 股票目录不匹配")
 		}
 		if e := r.item("funding", asset, asset, class, q); e != nil {
 			return e
 		}
-		if class == "us_equity" {
+		if class == "us_equity" && len(r.Items) > 0 && r.Items[len(r.Items)-1].Key == asset {
 			r.Items[len(r.Items)-1].Symbol = &symbol
 		}
 	}
@@ -259,19 +304,28 @@ func (c Collector) funding(ctx context.Context, r *Result) error {
 }
 func (c Collector) earn(ctx context.Context, r *Result) error {
 	for _, kind := range []string{"flexible", "locked"} {
+		expectedTotal := -1
 		count := 0
 		seen := map[string]bool{}
 		for page := 1; page <= 10000; page++ {
 			var body struct {
 				Rows *[]struct {
-					ProductID                                                          string `json:"productId"`
-					PositionID                                                         string `json:"positionId"`
+					ProductID                                                          string     `json:"productId"`
+					PositionID                                                         positionID `json:"positionId"`
 					Asset, TotalAmount, Amount, Status, CollateralAmount, RedeemingAmt string
 				}
-				Total int
+				Total *int
 			}
 			if e := c.Client.Do(ctx, "GET", "/sapi/v1/simple-earn/"+kind+"/position", url.Values{"current": {fmt.Sprint(page)}, "size": {"100"}}, &body); e != nil {
 				return e
+			}
+			if body.Total == nil || *body.Total < 0 {
+				return fmt.Errorf("earn total missing or invalid")
+			}
+			if expectedTotal < 0 {
+				expectedTotal = *body.Total
+			} else if expectedTotal != *body.Total {
+				return fmt.Errorf("earn total changed during pagination")
 			}
 			if body.Rows == nil {
 				return fmt.Errorf("earn rows missing")
@@ -279,14 +333,17 @@ func (c Collector) earn(ctx context.Context, r *Result) error {
 			for _, row := range *body.Rows {
 				key, q := kind+":"+row.ProductID, row.TotalAmount
 				if kind == "locked" {
-					key, q = kind+":"+row.PositionID, row.Amount
+					key, q = kind+":"+string(row.PositionID), row.Amount
+				}
+				if key == kind+":" {
+					return fmt.Errorf("earn position identity missing")
 				}
 				if seen[key] {
 					return fmt.Errorf("earn duplicate position")
 				}
 				seen[key] = true
 				if kind == "locked" && row.Status != "HOLDING" {
-					r.incomplete("定期非持有状态待对账")
+					r.block(key, "定期非持有状态待对账")
 				}
 				for _, v := range []string{row.CollateralAmount, row.RedeemingAmt} {
 					n, e := num(v)
@@ -294,16 +351,25 @@ func (c Collector) earn(ctx context.Context, r *Result) error {
 						return e
 					}
 					if !n.IsZero() {
-						r.incomplete("赚币赎回或抵押归属待对账")
+						r.block(key, "赚币赎回或抵押归属待对账")
 					}
 				}
 				if e := r.item("earn", key, row.Asset, "other", q); e != nil {
 					return e
 				}
-				r.Components[key] = map[string]string{"product": kind, "status": row.Status, "collateralAmount": row.CollateralAmount, "redeemingAmt": row.RedeemingAmt}
+				if r.Components[key] == nil {
+					r.Components[key] = map[string]string{}
+				}
+				r.Components[key]["product"] = kind
+				r.Components[key]["status"] = row.Status
+				r.Components[key]["collateralAmount"] = row.CollateralAmount
+				r.Components[key]["redeemingAmt"] = row.RedeemingAmt
 			}
 			count += len(*body.Rows)
-			if count >= body.Total {
+			if count > *body.Total {
+				return fmt.Errorf("earn rows exceed total")
+			}
+			if count == *body.Total {
 				break
 			}
 			if len(*body.Rows) == 0 || page == 10000 {
@@ -314,11 +380,20 @@ func (c Collector) earn(ctx context.Context, r *Result) error {
 	return nil
 }
 func (c Collector) futures(ctx context.Context, r *Result) error {
-	var config struct{ MultiAssetsMargin *bool }
+	var config struct {
+		MultiAssetsMargin *bool
+		PortfolioMargin   bool
+		AccountType       string
+	}
 	if e := c.Client.Do(ctx, "GET", "/fapi/v1/accountConfig", nil, &config); e != nil {
 		return e
 	}
+	if config.PortfolioMargin || strings.Contains(strings.ToUpper(config.AccountType), "PORTFOLIO") {
+		r.Mode = "out_of_scope"
+		return fmt.Errorf("portfolio margin account is out of scope")
+	}
 	if config.MultiAssetsMargin == nil {
+		r.Mode = "unknown"
 		return fmt.Errorf("futures mode unsupported or unknown")
 	}
 	var body struct {

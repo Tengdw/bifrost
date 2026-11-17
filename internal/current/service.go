@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,6 +16,9 @@ import (
 	"sync"
 	"time"
 )
+
+var ErrRunning = errors.New("batch is still running")
+var ErrInvalidSelection = errors.New("invalid account selection")
 
 type CollectFunc func(context.Context, string, string) (binance.Result, error)
 type Service struct {
@@ -120,6 +124,7 @@ func (s *Service) run(t Task, started time.Time) {
 	if err != nil {
 		state = "failed"
 		reason = "采集失败，请检查只读权限和网络"
+		r = binance.Result{}
 	} else {
 		if !r.Complete {
 			state = "partial"
@@ -154,7 +159,7 @@ func joinReasons(reasons []string) string {
 	return out
 }
 func (s *Service) Status(ctx context.Context, batch string) ([]Task, error) {
-	rows, err := s.pool.Query(ctx, "SELECT batch_id::text,account_id::text,wallet,state,observed_at,reason FROM bifrost.current_runs WHERE batch_id=$1 ORDER BY account_id,wallet", batch)
+	rows, err := s.pool.Query(ctx, "SELECT batch_id::text,account_id::text,wallet,state,(SELECT max(ok.observed_at) FROM bifrost.current_runs ok WHERE ok.account_id=current_runs.account_id AND ok.wallet=current_runs.wallet AND ok.state='succeeded'),reason FROM bifrost.current_runs WHERE batch_id=$1 ORDER BY account_id,wallet", batch)
 	if err != nil {
 		return nil, fmt.Errorf("read sync status failed")
 	}
@@ -179,10 +184,19 @@ type Batch struct {
 type Run struct {
 	Account, Wallet, State, Reason string
 	Result                         binance.Result
+	Stale                          *Run
+	BatchID                        string
 }
 
 func (s *Service) Load(ctx context.Context, batch string, selected []string) (Batch, error) {
 	var b Batch
+	seen := map[string]bool{}
+	for _, id := range selected {
+		if seen[id] || !validID(id) {
+			return b, ErrInvalidSelection
+		}
+		seen[id] = true
+	}
 	if len(selected) == 0 && s.AllAccounts != nil {
 		var err error
 		selected, err = s.AllAccounts(ctx)
@@ -201,8 +215,14 @@ func (s *Service) Load(ctx context.Context, batch string, selected []string) (Ba
 	if err = json.Unmarshal(raw, &b.Accounts); err != nil {
 		return b, err
 	}
+	var running bool
+	if err = s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bifrost.current_runs WHERE batch_id=$1 AND state='running')", b.ID).Scan(&running); err != nil {
+		return b, err
+	}
+	if running {
+		return b, ErrRunning
+	}
 	if len(selected) > 0 {
-
 		b.Accounts = selected
 	}
 	rows, err := s.pool.Query(ctx, "SELECT account_id::text,wallet,state,COALESCE(reason,''),payload FROM bifrost.current_runs WHERE batch_id=$1 ORDER BY account_id,wallet", b.ID)
@@ -231,8 +251,18 @@ func (s *Service) Load(ctx context.Context, batch string, selected []string) (Ba
 	}
 	rows.Close()
 	for i := range b.Runs {
+		b.Runs[i].BatchID = b.ID
 		if err := s.loadResult(ctx, b.ID, &b.Runs[i]); err != nil {
 			return b, err
+		}
+	}
+	for i := range b.Runs {
+		if b.Runs[i].State == "failed" || b.Runs[i].State == "interrupted" {
+			old, err := s.staleRun(ctx, b, b.Runs[i])
+			if err != nil {
+				return b, err
+			}
+			b.Runs[i].Stale = old
 		}
 	}
 	return b, nil
@@ -271,7 +301,9 @@ func (b Batch) Overview() holdings.Overview {
 			if r.Account != a {
 				continue
 			}
-			snap.Items = append(snap.Items, r.Result.Items...)
+			if r.State != "failed" && r.State != "interrupted" {
+				snap.Items = append(snap.Items, r.Result.Items...)
+			}
 			if withinWindow && r.State != "failed" && r.State != "running" && observed(r.Result) && r.Reason != "观察超出批次 2 分钟窗口" {
 				snap.Wallets = append(snap.Wallets, r.Wallet)
 			}

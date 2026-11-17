@@ -62,10 +62,25 @@ func combine(snapshots []holdings.Snapshot) holdings.Overview {
 	if o.TotalUSD == nil {
 		o.Coverage.Quality = "partial"
 	}
+	nonnegative := true
+	for _, snap := range snapshots {
+		for _, item := range snap.Items {
+			if v := item.Value(); v != nil && v.IsNegative() {
+				nonnegative = false
+			}
+		}
+	}
+	if !nonnegative {
+		for i := range o.Accounts {
+			for j := range o.Accounts[i].Wallets {
+				o.Accounts[i].Wallets[j].Share = nil
+			}
+		}
+	}
 	for _, groups := range [][]holdings.Group{o.Wallets, o.Classes} {
 		for i := range groups {
 			groups[i].Share = nil
-			if o.TotalUSD != nil && o.TotalUSD.IsPositive() && groups[i].ValueUSD != nil {
+			if nonnegative && o.TotalUSD != nil && o.TotalUSD.IsPositive() && groups[i].ValueUSD != nil {
 				v := groups[i].ValueUSD.Div(*o.TotalUSD)
 				groups[i].Share = &v
 			}

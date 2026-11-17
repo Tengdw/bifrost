@@ -46,3 +46,22 @@ func TestMissingStockPriceDoesNotHideKnownCash(t *testing.T) {
 		t.Fatalf("known cash hidden: %+v", o)
 	}
 }
+
+func TestNegativeWalletDisablesEveryAllocation(t *testing.T) {
+	p, n := decimal.NewFromInt(100), decimal.NewFromInt(-20)
+	s := holdings.Snapshot{Account: "A", At: time.Now(), Wallets: holdings.WalletNames, Items: []holdings.Item{
+		{Wallet: "spot", Class: "other", Quantity: decimal.NewFromInt(1), Price: &p},
+		{Wallet: "usdm", Class: "other", Quantity: decimal.NewFromInt(1), Price: &n},
+	}}
+	o := combine([]holdings.Snapshot{s})
+	if o.TotalUSD.String() != "80" {
+		t.Fatal(o)
+	}
+	for _, gs := range [][]holdings.Group{o.Wallets, o.Classes, o.Accounts[0].Wallets} {
+		for _, g := range gs {
+			if g.Share != nil {
+				t.Fatal("negative wallet has misleading allocation")
+			}
+		}
+	}
+}

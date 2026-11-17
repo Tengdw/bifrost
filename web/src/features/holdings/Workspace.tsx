@@ -95,7 +95,7 @@ export function Workspace() {
             <Select
               mode="multiple"
               aria-label="账号范围"
-              placeholder="全部账号（含停用历史）"
+              placeholder="全部启用账号"
               value={selected}
               onChange={setSelected}
               options={items.map((a) => ({

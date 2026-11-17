@@ -4,20 +4,32 @@ import { positions } from "../../api/snapshots";
 export function Positions({
   accountIds,
   batchId,
+  complete,
 }: {
   accountIds: string[];
   batchId: string;
+  complete: boolean;
 }) {
   const [rows, setRows] = useState<Awaited<ReturnType<typeof positions>>>([]);
   const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     const c = new AbortController();
     setFailed(false);
+    setLoading(true);
     setRows([]);
     positions(c.signal, accountIds, batchId)
-      .then(setRows)
+      .then((data) => {
+        if (!c.signal.aborted) {
+          setRows(data);
+          setLoading(false);
+        }
+      })
       .catch(() => {
-        if (!c.signal.aborted) setFailed(true);
+        if (!c.signal.aborted) {
+          setFailed(true);
+          setLoading(false);
+        }
       });
     return () => c.abort();
   }, [accountIds.join(","), batchId]);
@@ -31,13 +43,19 @@ export function Positions({
         <Table
           rowKey={(r) => r.accountId + "/" + r.symbol + "/" + r.side}
           dataSource={rows}
+          loading={loading}
           scroll={{ x: 650 }}
           pagination={false}
-          locale={{ emptyText: "没有合约仓位" }}
+          locale={{
+            emptyText: complete
+              ? "没有合约仓位"
+              : "本批未确认合约仓位，请核对钱包状态",
+          }}
           columns={[
             { title: "账号", dataIndex: "accountId" },
             { title: "合约", dataIndex: "symbol" },
             { title: "方向", dataIndex: "side" },
+            { title: "账户模式", dataIndex: "mode" },
             { title: "数量", dataIndex: "quantity" },
             { title: "保证金币", dataIndex: "marginAsset" },
             { title: "未实现盈亏", dataIndex: "unrealized" },

@@ -60,7 +60,7 @@ func TestEarnPaginatesWithoutCountingRewards(t *testing.T) {
 	for _, i := range r.Items {
 		sum = sum.Add(i.Quantity)
 	}
-	if sum.String() != "500" || len(r.Items) != 3 {
+	if sum.String() != "500" || len(r.Items) != 2 {
 		t.Fatalf("%+v", r)
 	}
 	c.Client = fixture{"/sapi/v1/simple-earn/flexible/position1": `{"rows":[{"productId":"F1","asset":"USDT","totalAmount":"300"}],"total":2}`}
@@ -117,6 +117,53 @@ func TestTokenizedBalanceKeepsOriginalWalletAndDoesNotBecomeShares(t *testing.T)
 		"/sapi/v1/equity/market/tokenized-assets": `[{"assetCode":"MUB","underlyingEquitySymbol":"MU","multiplier":"2","multiplierValid":true}]`}}
 	r, err := c.Collect(context.Background(), "funding")
 	if err != nil || r.Complete || len(r.Items) != 1 || r.Items[0].Asset != "MUB" || r.Items[0].Class != "other" || r.Items[0].Quantity.String() != "5" {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+func TestUnresolvedEarnPrincipalIsExcludedFromPricedSubtotal(t *testing.T) {
+	at := time.Unix(1000, 0)
+	fx := Quote{Price: d("1"), Source: "synthetic", PricedAt: at}
+	c := Collector{Now: func() time.Time { return at }, Prices: FreezePrices(nil, nil, &fx), Client: fixture{
+		"/sapi/v1/simple-earn/flexible/position1": `{"rows":[{"productId":"F1","asset":"USDT","totalAmount":"100","redeemingAmt":"100"}],"total":1}`,
+		"/sapi/v1/simple-earn/locked/position1":   `{"rows":[],"total":0}`}}
+	r, err := c.Collect(context.Background(), "earn")
+	if err != nil || r.Complete || len(r.Items) != 1 || r.Items[0].Price != nil || r.Components["flexible:F1"]["valuationBlockedReason"] == "" {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+func TestMissingEarnTotalCannotConfirmEmptyWallet(t *testing.T) {
+	c := Collector{Client: fixture{"/sapi/v1/simple-earn/flexible/position1": `{"rows":[]}`}}
+	if _, err := c.Collect(context.Background(), "earn"); err == nil {
+		t.Fatal("missing total accepted")
+	}
+}
+func TestFundingDisputedPrincipalNotPriced(t *testing.T) {
+	at := time.Unix(1000, 0)
+	fx := Quote{Price: d("1"), Source: "synthetic", PricedAt: at}
+	c := Collector{Now: func() time.Time { return at }, Prices: FreezePrices(nil, nil, &fx), Client: fixture{
+		"/sapi/v1/asset/get-funding-asset":        `[{"asset":"USDT","free":"100","locked":"0","freeze":"1","withdrawing":"0"}]`,
+		"/sapi/v1/asset/wallet/balance":           `[{"walletName":"Funding","assetBalances":[]}]`,
+		"/sapi/v1/equity/market/exchangeInfo":     `{"symbols":[]}`,
+		"/sapi/v1/equity/market/tokenized-assets": `[]`}}
+	r, err := c.Collect(context.Background(), "funding")
+	if err != nil || r.Complete || len(r.Items) != 1 || r.Items[0].Price != nil || r.Items[0].Quantity.String() != "100" {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+func TestConfirmedZeroDoesNotBecomeMissingPrice(t *testing.T) {
+	c := Collector{Client: fixture{"/api/v3/account": `{"balances":[{"asset":"BTC","free":"0","locked":"0"}]}`}}
+	r, err := c.Collect(context.Background(), "spot")
+	if err != nil || !r.Complete || len(r.Items) != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+func TestLockedPositionNumericIDKeepsExactDigits(t *testing.T) {
+	c := Collector{Client: fixture{
+		"/sapi/v1/simple-earn/flexible/position1": `{"rows":[],"total":0}`,
+		"/sapi/v1/simple-earn/locked/position1":   `{"rows":[{"positionId":9007199254740993123,"asset":"USDT","amount":"200","status":"HOLDING"}],"total":1}`}}
+	r, err := c.Collect(context.Background(), "earn")
+	if err != nil || r.Items[0].Key != "locked:9007199254740993123" {
 		t.Fatalf("%+v %v", r, err)
 	}
 }

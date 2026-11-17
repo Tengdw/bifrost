@@ -91,6 +91,45 @@ try {
     "8,794.4",
   );
   await page.setViewportSize({ width: 375, height: 812 });
+  let runningOnce = true;
+  let expectedTotal;
+  await page.route("**/api/v1/overview?*", async (route) => {
+    if (runningOnce) {
+      runningOnce = false;
+      await route.fulfill({ status: 409, json: { code: "batch_running" } });
+      return;
+    }
+    const response = await route.fetch();
+    const data = await response.json();
+    expectedTotal = data.totalUsd;
+    data.staleWallets = [
+      {
+        accountId: "00000000-0000-4000-8000-000000000001",
+        wallet: "funding",
+        batchId: data.batchId,
+        observedAt: "2026-01-01T02:00:00Z",
+        valueUsd: "1000",
+        reason: "合成采集失败",
+        items: [
+          {
+            asset: "EQ_MU",
+            assetClass: "us_equity",
+            quantity: "2",
+            valueUsd: "200",
+            itemKey: "EQ_MU",
+          },
+        ],
+        positions: [],
+      },
+    ];
+    await route.fulfill({ json: data });
+  });
+  await page.reload();
+  await page.getByText("正在采集，结束后自动读取…", { exact: true }).waitFor();
+  await page.getByText("上次观察（仅供参考）", { exact: true }).waitFor();
+  const displayed = await page.locator(".metrics strong").first().textContent();
+  assert.equal(displayed.replaceAll(",", ""), expectedTotal);
+  await page.getByText("2026-01-01T02:00:00Z", { exact: true }).waitFor();
   assert(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

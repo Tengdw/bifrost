@@ -66,7 +66,7 @@ func workspace(ctx context.Context, pool *pgxpool.Pool, mode, token, origin stri
 			if err != nil {
 				return binance.Result{}, err
 			}
-			collector := binance.Collector{Client: exchange.Reader{Credentials: c, HTTP: client}}
+			collector := binance.Collector{Client: &exchange.Reader{Credentials: c, HTTP: client}}
 			if mode == "synthetic" {
 				f := exchange.Synthetic{B: c.APIKey == "demo-b"}
 				collector.Client = f

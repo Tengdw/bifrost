@@ -5,6 +5,8 @@ import (
 	"bifrost/internal/holdings"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )
@@ -16,7 +18,19 @@ func decimalText(v *decimal.Decimal) any {
 	return v.String()
 }
 func (s *Service) saveResult(ctx context.Context, t Task, state, reason string, r binance.Result) error {
+	if state == "failed" || state == "interrupted" {
+		r = binance.Result{}
+	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if state != "failed" && state != "interrupted" {
+			var enabled bool
+			if err := tx.QueryRow(ctx, "SELECT disabled_at IS NULL AND enabled_from<=$2 FROM bifrost.accounts WHERE id=$1 FOR SHARE", t.Account, r.ObservedAt).Scan(&enabled); err != nil {
+				return fmt.Errorf("verify observed account: %w", err)
+			}
+			if !enabled {
+				return fmt.Errorf("observed account disabled")
+			}
+		}
 		metadata := r
 		metadata.Items = nil
 		metadata.Positions = nil
@@ -123,4 +137,24 @@ func (s *Service) loadResult(ctx context.Context, batch string, r *Run) error {
 		r.Result.Positions = append(r.Result.Positions, p)
 	}
 	return positions.Err()
+}
+
+// staleRun 仅读取早于目标批次的成功观察，旧值与当前金额分开返回。
+func (s *Service) staleRun(ctx context.Context, b Batch, run Run) (*Run, error) {
+	old := Run{Account: run.Account, Wallet: run.Wallet}
+	var raw []byte
+	err := s.pool.QueryRow(ctx, "SELECT r.batch_id::text,r.state,COALESCE(r.reason,''),r.payload FROM bifrost.current_runs r JOIN bifrost.current_batches b ON b.id=r.batch_id WHERE r.account_id=$1 AND r.wallet=$2 AND r.state='succeeded' AND b.requested_at<$3 ORDER BY b.requested_at DESC LIMIT 1", run.Account, run.Wallet, b.At).Scan(&old.BatchID, &old.State, &old.Reason, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = json.Unmarshal(raw, &old.Result); err != nil {
+		return nil, err
+	}
+	if err = s.loadResult(ctx, old.BatchID, &old); err != nil {
+		return nil, err
+	}
+	return &old, nil
 }

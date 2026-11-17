@@ -21,8 +21,10 @@ import (
 )
 
 type Reader struct {
-	Credentials accounts.Credentials
-	HTTP        *http.Client
+	Credentials  accounts.Credentials
+	HTTP         *http.Client
+	offsetMillis int64
+	clockReady   bool
 }
 
 var endpoints = map[string]string{
@@ -43,12 +45,47 @@ func Client() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func (r Reader) Do(ctx context.Context, method, path string, args url.Values, out any) error {
+// 每个 Reader 只属于一次钱包采集，按交易所时钟校准签名，不记录签名请求。
+func (r *Reader) calibrate(ctx context.Context, futures bool) error {
+	if r.clockReady {
+		return nil
+	}
+	addr := "https://api.binance.com/api/v3/time"
+	if futures {
+		addr = "https://fapi.binance.com/fapi/v1/time"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, nil)
+	if err != nil {
+		return errors.New("invalid clock request")
+	}
+	before := time.Now()
+	res, err := r.HTTP.Do(req)
+	if err != nil {
+		return errors.New("exchange clock unavailable")
+	}
+	defer res.Body.Close()
+	var clock struct{ ServerTime int64 }
+	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 2048)).Decode(&clock) != nil || clock.ServerTime <= 0 {
+		return errors.New("invalid exchange clock")
+	}
+	r.offsetMillis = before.Add(time.Since(before)/2).UnixMilli() - clock.ServerTime
+	r.clockReady = true
+	return nil
+}
+
+func (r *Reader) Do(ctx context.Context, method, path string, args url.Values, out any) error {
 	if endpoints[path] != method || method == "" {
 		return errors.New("unsupported read endpoint")
 	}
+	keyOnly := strings.HasPrefix(path, "/sapi/v1/equity/market/")
+	if !keyOnly {
+		if err := r.calibrate(ctx, strings.HasPrefix(path, "/fapi/")); err != nil {
+			return err
+		}
+	}
 	if path == "/api/v3/account" {
 		c := sdk.NewClient(r.Credentials.APIKey, r.Credentials.APISecret)
+		c.TimeOffset = r.offsetMillis
 		c.HTTPClient = r.HTTP
 		data, err := c.NewGetAccountService().Do(ctx)
 		if err != nil {
@@ -70,13 +107,13 @@ func (r Reader) Do(ctx context.Context, method, path string, args url.Values, ou
 			q.Add(k, v)
 		}
 	}
-	public := strings.HasPrefix(path, "/sapi/v1/equity/market/")
-	if !public {
-		q.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
+
+	if !keyOnly {
+		q.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli()-r.offsetMillis, 10))
 		q.Set("recvWindow", "5000")
 	}
 	query := q.Encode()
-	if !public {
+	if !keyOnly {
 		mac := hmac.New(sha256.New, []byte(r.Credentials.APISecret))
 		mac.Write([]byte(query))
 		query += "&signature=" + hex.EncodeToString(mac.Sum(nil))
@@ -85,9 +122,7 @@ func (r Reader) Do(ctx context.Context, method, path string, args url.Values, ou
 	if err != nil {
 		return errors.New("invalid read request")
 	}
-	if !public {
-		req.Header.Set("X-MBX-APIKEY", r.Credentials.APIKey)
-	}
+	req.Header.Set("X-MBX-APIKEY", r.Credentials.APIKey)
 	res, err := r.HTTP.Do(req)
 	if err != nil {
 		return errors.New("exchange unavailable")

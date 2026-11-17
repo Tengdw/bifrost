@@ -68,3 +68,42 @@ test("account mutation sends JSON without persisting credentials in storage", as
     apiSecret: "synthetic",
   });
 });
+
+test("batch_running remains a distinct retryable state", async () => {
+  globalThis.fetch = async () =>
+    Response.json({ code: "batch_running" }, { status: 409 });
+  await assert.rejects(
+    api.latest(new AbortController().signal),
+    (e) => e instanceof api.RequestError && e.code === "batch_running",
+  );
+});
+test("stale wallet and quote evidence are preserved separately from totals", async () => {
+  const stale = {
+    accountId: id,
+    wallet: "funding",
+    batchId: batch,
+    observedAt: "2026-01-01T02:00:00Z",
+    valueUsd: "1000",
+    reason: "采集失败",
+    items: [
+      {
+        asset: "EQ_MU",
+        assetClass: "us_equity",
+        quantity: "2",
+        valueUsd: "200",
+        itemKey: "EQ_MU",
+      },
+    ],
+    positions: [],
+  };
+  let count = 0;
+  globalThis.fetch = async () =>
+    Response.json(
+      ++count === 1
+        ? { ...overview, staleWallets: [stale] }
+        : { items: [], nextCursor: null },
+    );
+  const result = await api.latest(new AbortController().signal);
+  assert.equal(result.overview.totalUsd, null);
+  assert.equal(result.overview.staleWallets[0].valueUsd, "1000");
+});

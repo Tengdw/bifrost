@@ -1,6 +1,7 @@
 package current
 
 import (
+	"bifrost/internal/binance"
 	"bifrost/internal/holdings"
 	"crypto/sha256"
 	"encoding/base64"
@@ -9,6 +10,8 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -35,7 +38,13 @@ func (s *Service) Handler() http.Handler {
 				Wallets  []string `json:"wallets"`
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 8192)
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&req); err != nil {
+				fail(w, 400, "invalid_refresh")
+				return
+			}
+			if err := decoder.Decode(new(any)); err != io.EOF {
 				fail(w, 400, "invalid_refresh")
 				return
 			}
@@ -97,10 +106,56 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		q := r.URL.Query()
+		allowed := map[string]bool{"accountIds": true}
+		if path == "/api/v1/overview" {
+			allowed["basis"] = true
+		} else {
+			for _, k := range []string{"batchId", "wallet", "assetClass", "cursor", "limit"} {
+				allowed[k] = true
+			}
+		}
+		for key, values := range q {
+			if !allowed[key] || (key != "accountIds" && len(values) != 1) {
+				fail(w, 400, "invalid_query")
+				return
+			}
+		}
 		selected := q["accountIds"]
+		seen := map[string]bool{}
 		for _, a := range selected {
-			if !validID(a) {
+			if !validID(a) || seen[a] {
 				fail(w, 400, "invalid_account")
+				return
+			}
+			seen[a] = true
+		}
+		wallet, class := q.Get("wallet"), q.Get("assetClass")
+		if wallet != "" && !slices.Contains(holdings.WalletNames, wallet) || class != "" && class != "other" && class != "us_equity" {
+			fail(w, 400, "invalid_filter")
+			return
+		}
+		limit := 50
+		if text := q.Get("limit"); text != "" {
+			var err error
+			limit, err = strconv.Atoi(text)
+			if err != nil || limit < 1 || limit > 200 {
+				fail(w, 400, "invalid_limit")
+				return
+			}
+		}
+		start := 0
+		pinned := ""
+		if cursor := q.Get("cursor"); cursor != "" {
+			raw, e := base64.RawURLEncoding.DecodeString(cursor)
+			parts := strings.Split(string(raw), ":")
+			if e != nil || len(parts) != 3 {
+				fail(w, 400, "invalid_cursor")
+				return
+			}
+			start, e = strconv.Atoi(parts[1])
+			pinned = parts[0]
+			if e != nil || start < 0 || !validID(pinned) || parts[2] != queryKey(q) {
+				fail(w, 400, "invalid_cursor")
 				return
 			}
 		}
@@ -119,11 +174,22 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		id := q.Get("batchId")
+		if pinned != "" {
+			if id != "" && id != pinned {
+				fail(w, 400, "invalid_cursor")
+				return
+			}
+			id = pinned
+		}
 		if id != "" && !validID(id) {
 			fail(w, 400, "invalid_batch")
 			return
 		}
 		b, err := s.Load(r.Context(), id, selected)
+		if errors.Is(err, ErrRunning) {
+			fail(w, 409, "batch_running")
+			return
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			fail(w, 404, "no_snapshot")
 			return
@@ -133,12 +199,11 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		if path == "/api/v1/overview" {
-			reply(w, 200, b.Overview())
-			return
-		}
-		wallet, class := q.Get("wallet"), q.Get("assetClass")
-		if wallet != "" && !slices.Contains(holdings.WalletNames, wallet) || class != "" && class != "other" && class != "us_equity" {
-			fail(w, 400, "invalid_filter")
+			raw, _ := json.Marshal(b.Overview())
+			var overview map[string]any
+			_ = json.Unmarshal(raw, &overview)
+			overview["staleWallets"] = b.staleWallets(wallet, class)
+			reply(w, 200, overview)
 			return
 		}
 		rows := []map[string]any{}
@@ -153,6 +218,7 @@ func (s *Service) Handler() http.Handler {
 					_ = json.Unmarshal(raw, &row)
 					row["accountId"] = run.Account
 					row["observedAt"] = run.Result.ObservedAt
+					row["mode"] = run.Result.Mode
 					rows = append(rows, row)
 				}
 				continue
@@ -172,35 +238,17 @@ func (s *Service) Handler() http.Handler {
 					reasons = append(reasons, run.Result.Reasons...)
 				}
 				row := map[string]any{"accountId": run.Account, "wallet": run.Wallet, "itemKey": item.Key, "asset": item.Asset, "assetClass": item.Class, "underlyingSymbol": item.Symbol, "quantity": item.Quantity, "valueUsd": item.Value(), "observedAt": run.Result.ObservedAt, "components": map[string]string{}, "coverage": holdings.Coverage{Quality: quality, Reasons: reasons, AsOf: run.Result.ObservedAt, Accounts: []string{run.Account}}}
+				row["mode"] = run.Result.Mode
+				if run.Wallet == "usdm" {
+					row["marginAsset"] = item.Asset
+				}
 				if c := run.Result.Components[item.Key]; c != nil {
 					row["components"] = c
 				}
 				if quote, ok := run.Result.Quotes[item.Key]; ok {
-					row["price"] = map[string]any{"priceUsd": quote.Price, "source": quote.Source, "pricedAt": quote.PricedAt, "path": quote.Path}
+					row["price"] = map[string]any{"priceUsd": quote.Price, "source": quote.Source, "pricedAt": quote.PricedAt, "path": quote.Path, "verifiedClose": quote.VerifiedClose, "tradingDay": quote.TradingDay, "bidPrice": quote.BidPrice, "askPrice": quote.AskPrice}
 				}
 				rows = append(rows, row)
-			}
-		}
-		// 当前批次限制在两分钟；分页始终固定同批并绑定账号与筛选。
-		start := 0
-		if cursor := q.Get("cursor"); cursor != "" {
-			raw, e := base64.RawURLEncoding.DecodeString(cursor)
-			parts := strings.Split(string(raw), ":")
-			valid := e == nil && len(parts) == 3
-			if valid {
-				start, e = strconv.Atoi(parts[1])
-				valid = e == nil && parts[0] == b.ID && parts[2] == queryKey(q)
-			}
-			if !valid {
-				fail(w, 400, "invalid_cursor")
-				return
-			}
-		}
-		limit := 50
-		if text := q.Get("limit"); text != "" {
-			if _, err := fmt.Sscanf(text, "%d", &limit); err != nil || limit < 1 || limit > 200 {
-				fail(w, 400, "invalid_limit")
-				return
 			}
 		}
 		if start < 0 || start > len(rows) {
@@ -213,7 +261,7 @@ func (s *Service) Handler() http.Handler {
 			v := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%d:%s", b.ID, end, queryKey(q))))
 			next = &v
 		}
-		reply(w, 200, map[string]any{"items": rows[start:end], "nextCursor": next})
+		reply(w, 200, map[string]any{"items": rows[start:end], "nextCursor": next, "staleWallets": b.staleWallets(wallet, class)})
 	})
 }
 func queryKey(q url.Values) string {
@@ -224,4 +272,29 @@ func queryKey(q url.Values) string {
 		}
 	}
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(clone.Encode())))
+}
+
+func (b Batch) staleWallets(wallet, class string) []map[string]any {
+	out := []map[string]any{}
+	for _, r := range b.Runs {
+		if r.Stale == nil || (wallet != "" && wallet != r.Wallet) {
+			continue
+		}
+		old := r.Stale
+		positions := old.Result.Positions
+		if positions == nil {
+			positions = []binance.Position{}
+		}
+		items := []map[string]any{}
+		values := []*decimal.Decimal{}
+		for _, i := range old.Result.Items {
+			if class != "" && class != i.Class {
+				continue
+			}
+			values = append(values, i.Value())
+			items = append(items, map[string]any{"asset": i.Asset, "assetClass": i.Class, "quantity": i.Quantity, "valueUsd": i.Value(), "itemKey": i.Key})
+		}
+		out = append(out, map[string]any{"accountId": r.Account, "wallet": r.Wallet, "batchId": old.BatchID, "observedAt": old.Result.ObservedAt, "valueUsd": add(values), "items": items, "reason": r.Reason, "positions": positions})
+	}
+	return out
 }

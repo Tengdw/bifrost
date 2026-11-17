@@ -31,7 +31,7 @@ function percentage(ratio: string | null) {
   );
 }
 type State =
-  | { kind: "loading" | "login" | "error" | "empty" }
+  | { kind: "loading" | "running" | "login" | "error" | "empty" }
   | { kind: "ready"; data: Awaited<ReturnType<typeof latest>> };
 export function Latest({
   accountIds = [],
@@ -47,12 +47,22 @@ export function Latest({
   const [mode, setMode] = useState("按钱包");
   useEffect(() => {
     const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
     setState({ kind: "loading" });
     latest(controller.signal, accountIds)
       .then((data) => {
         if (!controller.signal.aborted) setState({ kind: "ready", data });
       })
       .catch((e: unknown) => {
+        if (
+          !controller.signal.aborted &&
+          e instanceof RequestError &&
+          e.code === "batch_running"
+        ) {
+          setState({ kind: "running" });
+          timer = setTimeout(() => retry((n) => n + 1), 1000);
+          return;
+        }
         if (!controller.signal.aborted)
           setState({
             kind:
@@ -63,7 +73,10 @@ export function Latest({
                   : "error",
           });
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, [attempt, accountIds.join(","), revision]);
   if (state.kind === "login")
     return (
@@ -87,13 +100,15 @@ export function Latest({
     return (
       <section aria-live="polite">
         <p>
-          {state.kind === "loading"
-            ? "正在读取同批持仓…"
-            : state.kind === "empty"
-              ? "暂无已采集批次"
-              : "读取失败，请重试。"}
+          {state.kind === "running"
+            ? "正在采集，结束后自动读取…"
+            : state.kind === "loading"
+              ? "正在读取同批持仓…"
+              : state.kind === "empty"
+                ? "暂无已采集批次"
+                : "读取失败，请重试。"}
         </p>
-        {state.kind !== "loading" && (
+        {state.kind !== "loading" && state.kind !== "running" && (
           <Button onClick={() => retry(attempt + 1)}>重新读取</Button>
         )}
       </section>
@@ -173,7 +188,12 @@ export function Latest({
           pagination={false}
           scroll={{ x: 440 }}
           dataSource={items}
-          locale={{ emptyText: "已确认空仓" }}
+          locale={{
+            emptyText:
+              o.coverage.quality === "complete"
+                ? "已确认空仓"
+                : "本批持仓未观察或不完整，请查看缺失原因",
+          }}
           columns={[
             { title: "账号", dataIndex: "accountId" },
             { title: "资产", dataIndex: "asset" },
@@ -186,6 +206,11 @@ export function Latest({
             },
             { title: "观察时间", dataIndex: "observedAt" },
             {
+              title: "合约模式",
+              render: (_: unknown, row: (typeof items)[number]) =>
+                row.mode || row.components?.mode || "—",
+            },
+            {
               title: "价格证据",
               render: (_: unknown, row: (typeof items)[number]) =>
                 row.price
@@ -195,7 +220,13 @@ export function Latest({
                     " · " +
                     row.price.pricedAt +
                     " · " +
-                    row.price.path
+                    row.price.path +
+                    (row.price.tradingDay
+                      ? " · 交易日 " + row.price.tradingDay
+                      : "") +
+                    (row.price.verifiedClose ? " · 已核验收盘价" : "") +
+                    (row.price.bidPrice ? " · 买 " + row.price.bidPrice : "") +
+                    (row.price.askPrice ? " · 卖 " + row.price.askPrice : "")
                   : row.coverage.reasons.join("；") || "—",
             },
             {
@@ -208,7 +239,65 @@ export function Latest({
           ]}
         />
       </section>
-      {managed && <Positions accountIds={accountIds} batchId={o.batchId} />}
+      {o.staleWallets.length > 0 && (
+        <section>
+          <h2>上次观察（仅供参考）</h2>
+          <p>以下旧值不计入本批总额或已估值小计。</p>
+          <Table
+            rowKey={(r) => r.accountId + "/" + r.wallet}
+            dataSource={o.staleWallets}
+            pagination={false}
+            scroll={{ x: 700 }}
+            columns={[
+              { title: "账号", dataIndex: "accountId" },
+              {
+                title: "钱包",
+                dataIndex: "wallet",
+                render: (v: string) => names[v],
+              },
+              { title: "旧观察时间", dataIndex: "observedAt" },
+              { title: "旧估值（USD）", dataIndex: "valueUsd", render: amount },
+              { title: "原因", dataIndex: "reason" },
+              {
+                title: "持仓",
+                render: (_: unknown, r: (typeof o.staleWallets)[number]) =>
+                  r.items
+                    .map(
+                      (i) =>
+                        i.asset +
+                        " " +
+                        i.quantity +
+                        " · " +
+                        amount(i.valueUsd) +
+                        " USD",
+                    )
+                    .join("；"),
+              },
+              {
+                title: "仓位",
+                render: (_: unknown, r: (typeof o.staleWallets)[number]) =>
+                  r.positions
+                    .map(
+                      (p) =>
+                        p.symbol +
+                        " " +
+                        p.quantity +
+                        " · 名义价值 " +
+                        amount(p.notional),
+                    )
+                    .join("；"),
+              },
+            ]}
+          />
+        </section>
+      )}
+      {managed && (
+        <Positions
+          accountIds={accountIds}
+          batchId={o.batchId}
+          complete={o.coverage.quality === "complete"}
+        />
+      )}
     </>
   );
 }

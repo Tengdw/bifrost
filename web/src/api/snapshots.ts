@@ -13,11 +13,39 @@ const group = z.object({
 export type Group = z.infer<typeof group>;
 const wallet = z.enum(["spot", "funding", "earn", "usdm"]);
 const assetClass = z.enum(["us_equity", "other"]);
+const staleWallet = z.object({
+  accountId: z.uuid(),
+  wallet,
+  batchId: z.uuid(),
+  observedAt: z.string(),
+  valueUsd: decimal.nullable(),
+  reason: z.string().nullable(),
+  items: z.array(
+    z.object({
+      asset: z.string(),
+      assetClass,
+      quantity: decimal,
+      valueUsd: decimal.nullable(),
+      itemKey: z.string(),
+    }),
+  ),
+  positions: z
+    .array(
+      z.object({
+        symbol: z.string(),
+        quantity: decimal,
+        notional: decimal.nullable(),
+        mode: z.string().optional(),
+      }),
+    )
+    .default([]),
+});
 const overviewSchema = z.object({
   batchId: z.uuid(),
   asOf: z.iso.datetime({ offset: true }),
   totalUsd: decimal.nullable(),
   pricedSubtotalUsd: decimal.nullable(),
+  staleWallets: z.array(staleWallet).default([]),
   allocation: z.array(group.extend({ wallet })),
   assetClassAllocation: z.array(group.extend({ assetClass })),
   coverage,
@@ -31,6 +59,7 @@ const holding = z.object({
   quantity: decimal,
   valueUsd: decimal.nullable(),
   observedAt: z.string().optional(),
+  mode: z.string().optional(),
   components: z.record(z.string(), z.string()).optional(),
   price: z
     .object({
@@ -38,6 +67,10 @@ const holding = z.object({
       source: z.string(),
       pricedAt: z.string(),
       path: z.string(),
+      tradingDay: z.string().optional(),
+      verifiedClose: z.boolean().optional(),
+      bidPrice: decimal.nullish(),
+      askPrice: decimal.nullish(),
     })
     .nullish(),
   coverage,
@@ -51,6 +84,7 @@ export class RequestError extends Error {
   constructor(
     readonly status: number,
     readonly missingSnapshot: boolean,
+    readonly code: string = "",
   ) {
     super("读取失败");
   }
@@ -61,13 +95,17 @@ async function get<T>(
   schema: z.ZodType<T>,
 ): Promise<T> {
   const r = await fetch("/api/v1/" + path, { signal });
-  if (!r.ok)
+  if (!r.ok) {
+    const problem = z.object({ code: z.string() }).safeParse(await r.json());
+    const code = problem.success ? problem.data.code : "";
     throw new RequestError(
       r.status,
       r.status === 404 &&
         path.startsWith("overview?") &&
-        (await r.json()).code === "no_snapshot",
+        code === "no_snapshot",
+      code,
     );
+  }
   return schema.parse(await r.json());
 }
 export async function latest(signal: AbortSignal, accountIds: string[] = []) {
@@ -175,6 +213,7 @@ const position = z.object({
   unrealized: decimal.nullable(),
   notional: decimal.nullable(),
   observedAt: z.string(),
+  mode: z.string().optional(),
 });
 export async function positions(
   signal: AbortSignal,

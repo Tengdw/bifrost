@@ -743,6 +743,19 @@ components:
           type: array
           items:
             "$ref": "#/components/schemas/WalletValue"
+    StaleWallet:
+      type: object
+      description: 最近成功观察，仅供参考，不计入本批总额和小计。
+      required: [accountId, wallet, batchId, observedAt, valueUsd, reason]
+      properties:
+        accountId: {type: string, format: uuid}
+        wallet: {"$ref": "#/components/schemas/Wallet"}
+        batchId: {type: string, format: uuid}
+        observedAt: {type: string, format: date-time}
+        valueUsd: {"$ref": "#/components/schemas/NullableDecimal"}
+        reason: {type: string}
+        items: {type: array, items: {type: object}}
+        positions: {type: array, items: {type: object}}
     Overview:
       type: object
       required:
@@ -755,6 +768,9 @@ components:
       - allocation
       - assetClassAllocation
       properties:
+        staleWallets:
+          type: array
+          items: {"$ref": "#/components/schemas/StaleWallet"}
         batchId:
           type: string
           format: uuid
@@ -923,6 +939,12 @@ components:
             source: {type: string}
             pricedAt: {type: string, format: date-time}
             path: {type: string}
+            tradingDay: {type: string, description: 核验休市收盘价对应的交易日}
+            verifiedClose: {type: boolean}
+            bidPrice: {"$ref": "#/components/schemas/NullableDecimal"}
+            askPrice: {"$ref": "#/components/schemas/NullableDecimal"}
+        mode: {type: string, description: 合约账户的保证金模式}
+        marginAsset: {type: string, description: 合约持仓的原始计价币种}
         components:
           type: object
           additionalProperties:
@@ -949,6 +971,7 @@ components:
         observedAt:
           type: string
           format: date-time
+        mode: {type: string, description: 本次采集确认的保证金模式}
         symbol:
           type: string
         side:
@@ -1123,6 +1146,9 @@ components:
       - items
       - nextCursor
       properties:
+        staleWallets:
+          type: array
+          items: {"$ref": "#/components/schemas/StaleWallet"}
         items:
           type: array
           items:
@@ -1137,6 +1163,9 @@ components:
       - items
       - nextCursor
       properties:
+        staleWallets:
+          type: array
+          items: {"$ref": "#/components/schemas/StaleWallet"}
         items:
           type: array
           items:
