@@ -1,34 +1,21 @@
-:root {
-  font-family: system-ui, sans-serif;
-  color: #162f37;
-  background: #f4f7f6;
-}
-body {
-  margin: 0;
-}
-main {
+.secondary-page {
   max-width: 1050px;
-  padding: clamp(16px, 4vw, 48px);
-  margin: auto;
+  padding-top: clamp(16px, 4vw, 36px);
+  padding-bottom: 36px;
 }
-header {
-  border-bottom: 2px solid #ba9552;
-}
-small {
-  color: #596d6c;
-  letter-spacing: 0.1em;
-}
-section {
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
-  margin: 20px 0;
-}
-h1 {
+.secondary-page > h1 {
   margin: 8px 0 16px;
 }
-h2 {
+.secondary-page section:not(.bf-auth) {
+  background: white;
+  border: 1px solid #dde2da;
+  border-radius: 15px;
+  padding: clamp(15px, 2vw, 24px);
+  margin: 20px 0;
+}
+.secondary-page section:not(.bf-auth) h2 {
   font-size: 1.15rem;
+  margin-bottom: 12px;
 }
 .metrics {
   display: flex;
@@ -40,7 +27,7 @@ h2 {
   font-size: 2rem;
   font-variant-numeric: tabular-nums;
 }
-.ant-segmented {
+.secondary-page .ant-segmented {
   margin-bottom: 14px;
 }
 .controls {
@@ -48,13 +35,13 @@ h2 {
   flex-wrap: wrap;
   align-items: end;
   gap: 12px;
-  margin-bottom: 16px;
+  margin: 16px 0;
 }
 .controls label {
   display: grid;
   gap: 6px;
   flex: 1;
-  min-width: 220px;
+  min-width: min(220px, 100%);
 }
 .account-form {
   display: grid;
@@ -74,9 +61,9 @@ input {
 .ant-table-wrapper {
   max-width: 100%;
 }
-.controls label {
-  min-width: min(220px, 100%);
-}
 .ant-alert {
   overflow-wrap: anywhere;
+}
+.replay-alert {
+  margin-top: 12px;
 }

@@ -1,10 +1,10 @@
 import { z } from "zod";
-const decimal = z.string().regex(/^-?[0-9]+(\.[0-9]+)?$/);
-const coverage = z.object({
+export const decimal = z.string().regex(/^-?[0-9]+(\.[0-9]+)?$/);
+export const coverage = z.object({
   quality: z.string(),
   reasons: z.array(z.string()),
 });
-const group = z.object({
+export const group = z.object({
   valueUsd: decimal.nullable(),
   pricedSubtotalUsd: decimal.nullable(),
   share: decimal.nullable(),
@@ -89,14 +89,16 @@ export class RequestError extends Error {
     super("读取失败");
   }
 }
-async function get<T>(
+export async function get<T>(
   path: string,
   signal: AbortSignal,
   schema: z.ZodType<T>,
 ): Promise<T> {
   const r = await fetch("/api/v1/" + path, { signal });
   if (!r.ok) {
-    const problem = z.object({ code: z.string() }).safeParse(await r.json());
+    const problem = z
+      .object({ code: z.string() })
+      .safeParse(await r.json().catch(() => null));
     const code = problem.success ? problem.data.code : "";
     throw new RequestError(
       r.status,
@@ -235,7 +237,7 @@ export async function positions(
   } while (true);
   return items;
 }
-function selection(accountIds: string[]) {
+export function selection(accountIds: string[]) {
   const q = new URLSearchParams();
   accountIds.forEach((id) => q.append("accountIds", id));
   return q;

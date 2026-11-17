@@ -16,9 +16,11 @@ function failure(error: unknown) {
 export function Accounts({
   items,
   onChange,
+  onReplay,
 }: {
   items: Account[];
   onChange: () => void;
+  onReplay?: (account: Account) => void;
 }) {
   const [target, setTarget] = useState<Account | null | undefined>(undefined);
   const [error, setError] = useState("");
@@ -69,7 +71,7 @@ export function Accounts({
   }
   return (
     <section>
-      <h2>账号管理</h2>
+      <h2>币安账号</h2>
       {error && <Alert type="error" message={error} />}
       <Button
         onClick={() => {
@@ -108,6 +110,11 @@ export function Accounts({
             title: "操作",
             render: (_: unknown, a: Account) => (
               <>
+                {onReplay && (
+                  <Button type="link" onClick={() => onReplay(a)}>
+                    持仓变动
+                  </Button>
+                )}
                 <Button
                   disabled={!!a.disabledAt}
                   onClick={() => {

@@ -3,7 +3,6 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -34,8 +33,7 @@ func TestPersistedOverview(t *testing.T) {
 		t.Helper()
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", path, nil)
-		r.AddCookie(&http.Cookie{Name: "bifrost_session", Value: "test"})
-		httpapi.New(store, "test").ServeHTTP(w, r)
+		httpapi.New(store).ServeHTTP(w, r)
 		if w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
 		}
@@ -79,9 +77,8 @@ func TestPersistedOverview(t *testing.T) {
 // 验证只读总览不能被明细参数回拨到已经过期的完整批次。
 func TestOverviewRejectsPinnedBatch(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/v1/overview?basis=latest&batchId=00000000-0000-4000-8000-000000000010", nil)
-	r.AddCookie(&http.Cookie{Name: "bifrost_session", Value: "test"})
 	w := httptest.NewRecorder()
-	httpapi.New(postgres.Store{}, "test").ServeHTTP(w, r)
+	httpapi.New(postgres.Store{}).ServeHTTP(w, r)
 	if w.Code != 400 {
 		t.Fatalf("got %d, expected invalid latest query", w.Code)
 	}

@@ -35,6 +35,7 @@ type Verifier interface {
 	Verify(context.Context, Credentials) (string, error)
 }
 type Service struct {
+	OnBound  func(accountID string)
 	pool     *pgxpool.Pool
 	aead     cipher.AEAD
 	verifier Verifier
@@ -172,6 +173,9 @@ func (s *Service) Bind(ctx context.Context, alias string, c Credentials) (Accoun
 	})
 	if err != nil {
 		return Account{}, sanitize(err)
+	}
+	if s.OnBound != nil {
+		s.OnBound(out.ID)
 	}
 	return out, nil
 }

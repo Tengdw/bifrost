@@ -1,0 +1,94 @@
+.bf-auth {
+  color: #162f37;
+  background: white;
+  border-radius: 12px;
+  border: 1px solid #dce5e2;
+  padding: clamp(20px, 4vw, 36px);
+}
+
+.bf-login {
+  display: grid;
+  gap: 14px;
+  margin: 12vh auto 0;
+  width: min(420px, calc(100% - 32px));
+  box-sizing: border-box;
+}
+
+.bf-auth h1,
+.bf-auth h2,
+.bf-auth p {
+  margin: 0;
+}
+
+.bf-auth .bf-auth-brand {
+  color: #786033;
+  font-size: 0.82rem;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+}
+
+.bf-auth form,
+.bf-auth label {
+  display: grid;
+  gap: 8px;
+}
+
+.bf-auth form {
+  gap: 14px;
+}
+
+.bf-auth input,
+.bf-auth button {
+  font: inherit;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: inherit;
+  border: 1px solid #bfcfca;
+  background: white;
+}
+
+.bf-auth button {
+  cursor: pointer;
+}
+
+.bf-auth button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.bf-auth button.bf-auth-primary {
+  background: #17343d;
+  border-color: #17343d;
+  color: white;
+}
+
+.bf-auth .bf-auth-error {
+  color: #a52132;
+}
+
+.bf-auth-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bf-login-security {
+  display: grid;
+  gap: 14px;
+}
+
+.bf-login-security ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.bf-login-security li {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid #dce5e2;
+  padding: 12px 0;
+}

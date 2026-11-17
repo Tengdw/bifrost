@@ -63,7 +63,7 @@ func (s *Service) saveResult(ctx context.Context, t Task, state, reason string, 
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, "UPDATE bifrost.current_runs SET state=$4,reason=$5,observed_at=$6,payload=$7 WHERE batch_id=$1 AND account_id=$2 AND wallet=$3", t.Batch, t.Account, t.Wallet, state, reason, r.ObservedAt, payload)
+		_, err = tx.Exec(ctx, "UPDATE bifrost.current_runs SET state=$4,reason=$5,observed_at=$6,payload=$7,quantity_complete=$8 WHERE batch_id=$1 AND account_id=$2 AND wallet=$3", t.Batch, t.Account, t.Wallet, state, reason, r.ObservedAt, payload, usableQuantity(state, reason, r))
 		return err
 	})
 }

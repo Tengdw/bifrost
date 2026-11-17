@@ -15,7 +15,7 @@ if [[ "$mode" == verify ]]; then
  BIFROST_TEST_DATABASE_URL="$BIFROST_DEMO_DATABASE_URL" go test -count=1 ./cmd/... ./db/... ./internal/...
 else
  go run ./cmd/bifrost -seed "$mode"
- export BIFROST_DEMO_SESSION="$(openssl rand -hex 24)"
- echo "本机临时演示口令：$BIFROST_DEMO_SESSION"
+ go run ./cmd/bifrost -demo-admin >"$tmp/demo-password"
+ echo "演示账号 demo，临时密码文件：$tmp/demo-password"
  go run ./cmd/bifrost
 fi

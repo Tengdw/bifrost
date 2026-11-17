@@ -101,11 +101,25 @@ func (s *Service) Handler() http.Handler {
 			reply(w, 200, tasks)
 			return
 		}
-		if r.Method != "GET" || (path != "/api/v1/overview" && path != "/api/v1/holdings" && path != "/api/v1/positions") {
+		historyPath := path == "/api/v1/performance" || path == "/api/v1/calendar" || strings.HasPrefix(path, "/api/v1/calendar/")
+		if r.Method != "GET" || (!historyPath && path != "/api/v1/overview" && path != "/api/v1/holdings" && path != "/api/v1/positions") {
 			fail(w, 404, "not_found")
 			return
 		}
 		q := r.URL.Query()
+		selected := q["accountIds"]
+		seen := map[string]bool{}
+		for _, a := range selected {
+			if !validID(a) || seen[a] {
+				fail(w, 400, "invalid_account")
+				return
+			}
+			seen[a] = true
+		}
+		if historyPath || (path == "/api/v1/overview" && q.Get("basis") != "latest") {
+			s.serveHistory(w, r, selected)
+			return
+		}
 		allowed := map[string]bool{"accountIds": true}
 		if path == "/api/v1/overview" {
 			allowed["basis"] = true
@@ -119,15 +133,6 @@ func (s *Service) Handler() http.Handler {
 				fail(w, 400, "invalid_query")
 				return
 			}
-		}
-		selected := q["accountIds"]
-		seen := map[string]bool{}
-		for _, a := range selected {
-			if !validID(a) || seen[a] {
-				fail(w, 400, "invalid_account")
-				return
-			}
-			seen[a] = true
 		}
 		wallet, class := q.Get("wallet"), q.Get("assetClass")
 		if wallet != "" && !slices.Contains(holdings.WalletNames, wallet) || class != "" && class != "other" && class != "us_equity" {
@@ -158,20 +163,6 @@ func (s *Service) Handler() http.Handler {
 				fail(w, 400, "invalid_cursor")
 				return
 			}
-		}
-		if path == "/api/v1/overview" {
-			if q.Get("basis") != "latest" {
-				fail(w, 404, "no_day_close")
-				return
-			}
-			if q.Get("batchId") != "" {
-				fail(w, 400, "invalid_overview_query")
-				return
-			}
-		}
-		if q.Get("asOf") != "" {
-			fail(w, 400, "as_of_not_available")
-			return
 		}
 		id := q.Get("batchId")
 		if pinned != "" {

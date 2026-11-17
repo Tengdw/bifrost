@@ -3,7 +3,6 @@ package httpapi
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -33,14 +32,9 @@ func write(w http.ResponseWriter, status int, body any) {
 func problem(w http.ResponseWriter, status int, code string) {
 	write(w, status, map[string]any{"code": code, "message": http.StatusText(status), "requestId": rand.Text()})
 }
-func New(store postgres.Store, token string) http.Handler {
+func New(store postgres.Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		c, err := r.Cookie("bifrost_session")
-		if token == "" || err != nil || subtle.ConstantTimeCompare([]byte(token), []byte(c.Value)) != 1 {
-			problem(w, 401, "unauthorized")
-			return
-		}
 		if r.Method != "GET" {
 			problem(w, 405, "method")
 			return

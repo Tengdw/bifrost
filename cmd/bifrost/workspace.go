@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"bifrost/internal/exchange"
 	"bifrost/internal/httpapi"
 	"bifrost/internal/postgres"
+	"bifrost/internal/trades"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,14 +30,14 @@ func readSecret(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func workspace(ctx context.Context, pool *pgxpool.Pool, mode, token, origin string) (http.Handler, error) {
+func workspace(ctx context.Context, pool *pgxpool.Pool, mode string) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"mode": mode})
 	})
 	if mode == "snapshot" {
-		mux.Handle("/api/", httpapi.New(postgres.Store{Pool: pool}, token))
+		mux.Handle("/api/", httpapi.New(postgres.Store{Pool: pool}))
 	} else {
 		encoded, err := readSecret(os.Getenv("MASTER_KEY_FILE"))
 		if err != nil {
@@ -74,9 +74,6 @@ func workspace(ctx context.Context, pool *pgxpool.Pool, mode, token, origin stri
 			}
 			return collector.Collect(ctx, wallet)
 		})
-		if err := srv.Recover(ctx); err != nil {
-			return nil, errors.New("cannot recover previous refresh tasks")
-		}
 		srv.AllAccounts = func(ctx context.Context) ([]string, error) {
 			list, err := a.List(ctx)
 			if err != nil {
@@ -91,27 +88,30 @@ func workspace(ctx context.Context, pool *pgxpool.Pool, mode, token, origin stri
 			return ids, nil
 		}
 		srv.Validate = func(ctx context.Context, id string) error { _, err := a.Credentials(ctx, id); return err }
+		if mode == "readonly" {
+			tradeService := trades.New(ctx, pool, func(ctx context.Context, id string) (binance.Requester, error) {
+				credentials, err := a.Credentials(ctx, id)
+				if err != nil {
+					return nil, err
+				}
+				return &exchange.Reader{Credentials: credentials, HTTP: client}, nil
+			})
+			srv.OnWalletRecorded = tradeService.Trigger
+			mux.Handle("GET /api/v1/replay", tradeService.Handler())
+			automatic := os.Getenv("BIFROST_DISABLE_AUTO_SYNC") != "1"
+			if automatic {
+				a.OnBound = srv.CollectBound
+			}
+			if err := srv.StartScheduler(ctx, automatic); err != nil {
+				return nil, err
+			}
+		} else if err := srv.Recover(ctx); err != nil {
+			return nil, err
+		}
 		ah := a.Handler()
 		mux.Handle("/api/v1/accounts", ah)
 		mux.Handle("/api/v1/accounts/", ah)
 		mux.Handle("/api/", srv.Handler())
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "application/json")
-		c, err := r.Cookie("bifrost_session")
-		if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) != 1 {
-			deny(w, 401)
-			return
-		}
-		if r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("Origin") != origin {
-			deny(w, 403)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	}), nil
-}
-func deny(w http.ResponseWriter, status int) {
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": "unauthorized", "message": http.StatusText(status), "requestId": "local"})
+	return mux, nil
 }

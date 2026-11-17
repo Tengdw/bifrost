@@ -39,6 +39,39 @@ var endpoints = map[string]string{
 	"/fapi/v1/accountConfig":                  "GET",
 	"/fapi/v3/account":                        "GET",
 	"/fapi/v3/positionRisk":                   "GET",
+	"/api/v3/exchangeInfo":                    "GET",
+	"/api/v3/openOrders":                      "GET",
+	"/api/v3/order":                           "GET",
+	"/api/v3/allOrders":                       "GET",
+	"/api/v3/myTrades":                        "GET",
+	"/fapi/v1/openOrders":                     "GET",
+	"/fapi/v1/order":                          "GET",
+	"/fapi/v1/allOrders":                      "GET",
+	"/fapi/v1/userTrades":                     "GET",
+	"/fapi/v1/income":                         "GET",
+	"/api/v3/myAllocations":                   "GET",
+}
+
+type rateLimited struct {
+	status int
+	delay  time.Duration
+}
+
+func (e rateLimited) Error() string             { return fmt.Sprintf("exchange read failed (HTTP %d)", e.status) }
+func (e rateLimited) RetryDelay() time.Duration { return e.delay }
+
+func throttleError(res *http.Response) error {
+	delay := time.Minute
+	if res.StatusCode == http.StatusTeapot {
+		delay = 5 * time.Minute
+	}
+	header := res.Header.Get("Retry-After")
+	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 && seconds <= 86400 {
+		delay = time.Duration(seconds) * time.Second
+	} else if retryAt, err := http.ParseTime(header); err == nil && time.Until(retryAt) > 0 {
+		delay = time.Until(retryAt)
+	}
+	return rateLimited{status: res.StatusCode, delay: delay}
 }
 
 func Client() *http.Client {
@@ -78,7 +111,8 @@ func (r *Reader) Do(ctx context.Context, method, path string, args url.Values, o
 		return errors.New("unsupported read endpoint")
 	}
 	keyOnly := strings.HasPrefix(path, "/sapi/v1/equity/market/")
-	if !keyOnly {
+	public := path == "/api/v3/exchangeInfo"
+	if !keyOnly && !public {
 		if err := r.calibrate(ctx, strings.HasPrefix(path, "/fapi/")); err != nil {
 			return err
 		}
@@ -108,12 +142,12 @@ func (r *Reader) Do(ctx context.Context, method, path string, args url.Values, o
 		}
 	}
 
-	if !keyOnly {
+	if !keyOnly && !public {
 		q.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli()-r.offsetMillis, 10))
 		q.Set("recvWindow", "5000")
 	}
 	query := q.Encode()
-	if !keyOnly {
+	if !keyOnly && !public {
 		mac := hmac.New(sha256.New, []byte(r.Credentials.APISecret))
 		mac.Write([]byte(query))
 		query += "&signature=" + hex.EncodeToString(mac.Sum(nil))
@@ -122,12 +156,17 @@ func (r *Reader) Do(ctx context.Context, method, path string, args url.Values, o
 	if err != nil {
 		return errors.New("invalid read request")
 	}
-	req.Header.Set("X-MBX-APIKEY", r.Credentials.APIKey)
+	if !public {
+		req.Header.Set("X-MBX-APIKEY", r.Credentials.APIKey)
+	}
 	res, err := r.HTTP.Do(req)
 	if err != nil {
 		return errors.New("exchange unavailable")
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusTeapot {
+		return throttleError(res)
+	}
 	if res.StatusCode != 200 {
 		return fmt.Errorf("exchange read failed (HTTP %d)", res.StatusCode)
 	}

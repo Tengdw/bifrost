@@ -1,12 +1,12 @@
-// 仅用于 synthetic 模式。运行前创建临时会话文件；脚本不读取项目 .key。
+// 仅用于使用独立临时数据库的 synthetic 模式。
 import { chromium } from "playwright-core";
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 const base = process.env.BIFROST_SMOKE_URL;
-if (!base || !process.env.BIFROST_SMOKE_SESSION_FILE)
-  throw Error("Set BIFROST_SMOKE_URL and BIFROST_SMOKE_SESSION_FILE");
-const token = (
-  await readFile(process.env.BIFROST_SMOKE_SESSION_FILE, "utf8")
+if (!base || !process.env.BIFROST_SMOKE_PASSWORD_FILE)
+  throw Error("Set BIFROST_SMOKE_URL and BIFROST_SMOKE_PASSWORD_FILE");
+const password = (
+  await readFile(process.env.BIFROST_SMOKE_PASSWORD_FILE, "utf8")
 ).trim();
 const browser = await chromium.launch({
   headless: true,
@@ -16,23 +16,22 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage();
 try {
-  await page.context().addCookies([
-    {
-      name: "bifrost_session",
-      value: token,
-      url: base,
-      httpOnly: true,
-      sameSite: "Strict",
-    },
-  ]);
+  await page.goto(base + "/accounts");
+  await page.getByRole("heading", { name: "登录工作区" }).waitFor();
+  const passwordOption = page.getByRole("button", { name: "使用账号密码" });
+  if (await passwordOption.count()) await passwordOption.click();
+  await page
+    .getByLabel("用户名", { exact: true })
+    .fill(process.env.BIFROST_SMOKE_USERNAME ?? "demo");
+  await page.getByLabel("密码", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.getByRole("button", { name: "绑定只读账号" }).waitFor();
   const response = await page.request.get(base + "/api/v1/capabilities");
   assert.equal(
     (await response.json()).mode,
     "synthetic",
     "Smoke must run against synthetic workspace",
   );
-  await page.goto(base + "/latest");
-  await page.getByText("账号管理", { exact: true }).waitFor();
   const suffix = Date.now().toString();
   const listed = await (
     await page.request.get(base + "/api/v1/accounts")
@@ -59,13 +58,14 @@ try {
     await page.getByLabel("别名 " + aliases[index], { exact: true }).waitFor();
     await page.locator("input[name=apiSecret]").waitFor({ state: "detached" });
   }
+  await page.getByRole("link", { name: "最新采集", exact: true }).click();
   const select = page.getByRole("combobox", { name: "账号范围", exact: true });
   for (const alias of aliases) {
     await select.click();
     await page.getByText(alias, { exact: true }).last().click();
     await page.keyboard.press("Escape");
   }
-  await page.getByRole("button", { name: "手动刷新", exact: true }).click();
+  await page.getByRole("button", { name: "立即采集", exact: true }).click();
   await page.waitForFunction(
     () =>
       Array.from(document.querySelectorAll("td")).filter(
@@ -135,8 +135,74 @@ try {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   );
+  await page.getByRole("link", { name: "资产分析", exact: true }).click();
+  await page.getByText("暂无日终数据", { exact: true }).waitFor();
+  assert.equal(await page.locator(".worth").textContent(), "—");
+  await page.getByRole("button", { name: "每日收益率", exact: true }).click();
+  await page.getByText("暂无可靠收益数据", { exact: true }).waitFor();
+  await page
+    .getByRole("button", { name: "查看账号分布", exact: false })
+    .click();
+  const distributions = page.getByRole("dialog", {
+    name: "账号资产分布 · USD",
+  });
+  await distributions.getByRole("button", { name: "Close" }).click();
+  await distributions.waitFor({ state: "hidden" });
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    "Dashboard must fit a mobile viewport",
+  );
   console.log(
     "Synthetic UI smoke passed: two account binding, all-wallet refresh, 9,044.4 combined, 8,794.4 single, classification and mobile.",
+  );
+
+  const authenticator = await page.context().newCDPSession(page);
+  await authenticator.send("WebAuthn.enable");
+  await authenticator.send("WebAuthn.addVirtualAuthenticator", {
+    options: {
+      protocol: "ctap2",
+      transport: "internal",
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+  await page.getByRole("link", { name: "登录安全" }).click();
+  await page.getByText("尚未绑定 Passkey。").waitFor();
+  const registered = page.waitForResponse(
+    (result) =>
+      result.url().endsWith("/auth/passkeys") &&
+      result.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "添加 Passkey" }).click();
+  assert.equal((await registered).status(), 204);
+  await page.getByRole("button", { name: "移除", exact: true }).waitFor();
+  await page.getByRole("button", { name: "退出登录" }).click();
+
+  const passkey = page.getByRole("button", { name: "使用 Passkey 登录" });
+  const signedIn = page.waitForResponse((result) =>
+    result.url().endsWith("/auth/login/passkey"),
+  );
+  await passkey.click();
+  assert.equal((await signedIn).status(), 204);
+  await page.getByText(/最近使用/).waitFor();
+  await page.reload();
+  await page.getByText(/最近使用/).waitFor();
+
+  await page.getByRole("button", { name: "移除", exact: true }).click();
+  await page.getByRole("button", { name: "确认移除" }).click();
+  await page.getByText("尚未绑定 Passkey。").waitFor();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  const rejected = page.waitForResponse((result) =>
+    result.url().endsWith("/auth/login/passkey"),
+  );
+  await passkey.click();
+  assert.equal((await rejected).status(), 401);
+  console.log(
+    "Passkey registration, login, reload, removal and logout passed.",
   );
 } finally {
   await browser.close();

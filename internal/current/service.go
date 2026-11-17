@@ -22,14 +22,15 @@ var ErrInvalidSelection = errors.New("invalid account selection")
 
 type CollectFunc func(context.Context, string, string) (binance.Result, error)
 type Service struct {
-	pool        *pgxpool.Pool
-	collect     CollectFunc
-	ctx         context.Context
-	mu          sync.Mutex
-	running     map[string]string
-	Validate    func(context.Context, string) error
-	AllAccounts func(context.Context) ([]string, error)
-	slots       chan struct{}
+	pool             *pgxpool.Pool
+	collect          CollectFunc
+	ctx              context.Context
+	mu               sync.Mutex
+	running          map[string]string
+	Validate         func(context.Context, string) error
+	AllAccounts      func(context.Context) ([]string, error)
+	OnWalletRecorded func(accountID, wallet string)
+	slots            chan struct{}
 }
 type Task struct {
 	Batch   string     `json:"batchId"`
@@ -53,16 +54,28 @@ func uuid() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 func (s *Service) Refresh(ctx context.Context, accounts, wallets []string) ([]Task, error) {
-	for _, id := range accounts {
-		if s.Validate == nil {
-			return nil, fmt.Errorf("account validator required")
-		}
-		if err := s.Validate(ctx, id); err != nil {
-			return nil, err
+	return s.refresh(ctx, accounts, wallets, time.Time{}, true)
+}
+
+const observationWindow = 2 * time.Minute
+
+func (s *Service) refresh(ctx context.Context, accounts, wallets []string, boundary time.Time, validate bool) ([]Task, error) {
+	if validate {
+		for _, id := range accounts {
+			if s.Validate == nil {
+				return nil, fmt.Errorf("account validator required")
+			}
+			if err := s.Validate(ctx, id); err != nil {
+				return nil, err
+			}
 		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	started := time.Now().UTC()
+	if !boundary.IsZero() && started.Sub(boundary) >= observationWindow {
+		return nil, nil
+	}
 	id := uuid()
 	tasks := []Task{}
 	fresh := []Task{}
@@ -83,7 +96,11 @@ func (s *Service) Refresh(ctx context.Context, accounts, wallets []string) ([]Ta
 	}
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		raw, _ := json.Marshal(accounts)
-		if _, err := tx.Exec(ctx, "INSERT INTO bifrost.current_batches(id,requested_at,accounts) VALUES($1,$2,$3)", id, time.Now().UTC(), raw); err != nil {
+		var closeAt *time.Time
+		if !boundary.IsZero() {
+			closeAt = &boundary
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO bifrost.current_batches(id,requested_at,accounts,day_close_at) VALUES($1,$2,$3,$4)", id, started, raw, closeAt); err != nil {
 			return err
 		}
 		for _, t := range fresh {
@@ -99,15 +116,18 @@ func (s *Service) Refresh(ctx context.Context, accounts, wallets []string) ([]Ta
 	for _, t := range fresh {
 		s.running[t.Account+"/"+t.Wallet] = id
 	}
-	started := time.Now()
 	for _, t := range fresh {
-		go s.run(t, started)
+		go s.run(t, started, boundary)
 	}
 	return tasks, nil
 }
-func (s *Service) run(t Task, started time.Time) {
+func (s *Service) run(t Task, started, boundary time.Time) {
 	defer func() { s.mu.Lock(); delete(s.running, t.Account+"/"+t.Wallet); s.mu.Unlock() }()
-	ctx, cancel := context.WithTimeout(context.WithValue(s.ctx, batchTimeKey{}, started), 2*time.Minute)
+	deadline := started.Add(observationWindow)
+	if !boundary.IsZero() {
+		deadline = boundary.Add(observationWindow)
+	}
+	ctx, cancel := context.WithDeadline(context.WithValue(s.ctx, batchTimeKey{}, started), deadline)
 	defer cancel()
 	var r binance.Result
 	var err error
@@ -130,7 +150,7 @@ func (s *Service) run(t Task, started time.Time) {
 			state = "partial"
 			reason = joinReasons(r.Reasons)
 		}
-		if time.Since(started) > 2*time.Minute || r.ObservedAt.Before(started.Add(-2*time.Minute)) || r.ObservedAt.After(started.Add(2*time.Minute)) {
+		if ctx.Err() != nil || r.ObservedAt.Before(started) || !r.ObservedAt.Before(deadline) {
 			state = "partial"
 			reason = "观察超出批次 2 分钟窗口"
 			r.Complete = false
@@ -146,7 +166,14 @@ func (s *Service) run(t Task, started time.Time) {
 		if markErr != nil {
 			log.Print("mark failed current run failed")
 		}
+	} else if s.OnWalletRecorded != nil {
+		s.OnWalletRecorded(t.Account, t.Wallet)
 	}
+}
+
+func usableQuantity(state, reason string, r binance.Result) bool {
+	return (state == "succeeded" || state == "partial") &&
+		reason != "观察超出批次 2 分钟窗口" && !r.ObservedAt.IsZero() && observed(r)
 }
 func joinReasons(reasons []string) string {
 	out := ""

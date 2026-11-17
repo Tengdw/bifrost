@@ -9,6 +9,111 @@ servers:
 security:
 - dashboardSession: []
 paths:
+  "/auth/login":
+    post:
+      operationId: passwordLogin
+      security: []
+      summary: 以管理员账号和密码建立登录会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              additionalProperties: false
+              properties:
+                username: {type: string, maxLength: 64}
+                password: {type: string, format: password, writeOnly: true}
+      responses:
+        '204':
+          description: 登录成功，通过 HttpOnly Cookie 建立会话。
+        default:
+          $ref: '#/components/responses/AuthProblem'
+  "/auth/login/passkey/options":
+    post:
+      operationId: beginPasskeyLogin
+      security: []
+      summary: 开始 Passkey 登录
+      responses:
+        '200':
+          $ref: '#/components/responses/WebAuthnOptions'
+        default:
+          $ref: '#/components/responses/AuthProblem'
+  "/auth/login/passkey":
+    post:
+      operationId: completePasskeyLogin
+      security: []
+      summary: 验证 Passkey 并建立登录会话
+      requestBody:
+        $ref: '#/components/requestBodies/WebAuthnResponse'
+      responses:
+        '204':
+          description: 登录成功，通过 HttpOnly Cookie 建立会话。
+        default:
+          $ref: '#/components/responses/AuthProblem'
+  "/auth/logout":
+    post:
+      operationId: logout
+      summary: 撤销当前会话
+      responses:
+        '204':
+          description: 会话已撤销。
+        default:
+          $ref: '#/components/responses/AuthProblem'
+  "/auth/passkeys":
+    get:
+      operationId: listPasskeys
+      summary: 查询已绑定的 Passkey
+      responses:
+        '200':
+          description: Passkey 列表。
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, createdAt, lastUsedAt]
+                  properties:
+                    id: {type: string, description: Base64URL 编码的凭据 ID。}
+                    createdAt: {type: string, format: date-time}
+                    lastUsedAt: {type: [string, 'null'], format: date-time}
+        default:
+          $ref: '#/components/responses/AuthProblem'
+    post:
+      operationId: completePasskeyRegistration
+      summary: 验证并绑定一把 Passkey
+      requestBody:
+        $ref: '#/components/requestBodies/WebAuthnResponse'
+      responses:
+        '204':
+          description: 绑定成功。
+        default:
+          $ref: '#/components/responses/AuthProblem'
+  "/auth/passkeys/options":
+    post:
+      operationId: beginPasskeyRegistration
+      summary: 开始绑定 Passkey
+      responses:
+        '200':
+          $ref: '#/components/responses/WebAuthnOptions'
+        default:
+          $ref: '#/components/responses/AuthProblem'
+  "/auth/passkeys/{id}":
+    delete:
+      operationId: deletePasskey
+      summary: 移除一把 Passkey
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+      responses:
+        '204':
+          description: 已移除。
+        default:
+          $ref: '#/components/responses/AuthProblem'
   "/capabilities":
     get:
       operationId: getCapabilities
@@ -602,14 +707,131 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/Problem"
+  "/replay":
+    get:
+      operationId: replayPosition
+      summary: 查看现货余额或 U 本位仓位的订单、逐笔成交和数量核对
+      description: 只读工作区可用。窗口内首尾真实数量用于核对；订单金额和数量使用十进制字符串。所选窗口起点包含、终点不包含，最长 90 天。空资产参数只返回选择项和覆盖情况。
+      parameters:
+      - {name: accountId, in: query, required: true, schema: {type: string, format: uuid}}
+      - {name: wallet, in: query, required: true, schema: {type: string, enum: [spot, usdm]}}
+      - {name: asset, in: query, schema: {type: string}, description: 现货币种或 U 本位合约代码}
+      - {name: positionSide, in: query, schema: {type: string, enum: [BOTH, LONG, SHORT], default: BOTH}}
+      - {name: from, in: query, required: true, schema: {type: string, format: date-time}}
+      - {name: to, in: query, required: true, schema: {type: string, format: date-time}}
+      responses:
+        '200':
+          description: 订单与成交可独立于仓位快照返回。缺少期初或期末时，对应核对值为空。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionReplay"
+        default:
+          description: 400 筛选无效，401 未登录，404 找不到账号，422 记录过多，500 读取失败。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
 components:
+  requestBodies:
+    WebAuthnResponse:
+      description: 浏览器 PublicKeyCredential.toJSON() 的结果。待验证的挑战由同源 Cookie 关联，仅能使用一次。
+      required: true
+      content:
+        application/json:
+          schema: {type: object}
+  responses:
+    WebAuthnOptions:
+      description: WebAuthn 选项和用于完成这次操作的短时 HttpOnly Cookie。
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [publicKey]
+            properties:
+              publicKey: {type: object}
+    AuthProblem:
+      description: 400 请求或挑战无效；401 认证失败；403 来源不匹配；409 凭据冲突或数量上限；428 最近一次登录超过 10 分钟，请重新登录再管理 Passkey；429 请求过多。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Problem'
   securitySchemes:
     dashboardSession:
       type: apiKey
       in: cookie
-      name: bifrost_session
+      name: __Host-bifrost_session
+      description: HTTPS 部署中的登录 Cookie。仅本机 HTTP 调试使用 bifrost_local_session。
       description: 受保护入口签发和校验的 HttpOnly 会话；不是币安凭据。
   schemas:
+    PositionReplay:
+      type: object
+      required: [assets, coverage, opening, closing, explainedChange, unexplainedDifference, orders, fills]
+      properties:
+        assets:
+          type: array
+          items:
+            type: object
+            required: [asset]
+            properties:
+              asset: {type: string}
+              positionSide: {type: string, enum: [BOTH, LONG, SHORT]}
+        coverage:
+          type: object
+          required: [startedAt, through, state]
+          properties:
+            startedAt: {type: [string, 'null'], format: date-time}
+            through: {type: [string, 'null'], format: date-time}
+            state: {type: string, enum: [pending, collecting, covered, partial]}
+            reason: {type: string}
+        opening:
+          $ref: "#/components/schemas/ReplayObservation"
+        closing:
+          $ref: "#/components/schemas/ReplayObservation"
+        explainedChange: {type: [string, 'null']}
+        unexplainedDifference: {type: [string, 'null']}
+        orders:
+          type: array
+          items:
+            type: object
+            required: [id, symbol, side, status, type, quantity, executedQuantity, createdAt, updatedAt, preexisting]
+            properties:
+              id: {type: string}
+              symbol: {type: string}
+              side: {type: string, enum: [BUY, SELL]}
+              positionSide: {type: string, enum: [BOTH, LONG, SHORT]}
+              status: {type: string}
+              type: {type: string}
+              quantity: {type: string}
+              executedQuantity: {type: string}
+              createdAt: {type: string, format: date-time}
+              updatedAt: {type: string, format: date-time}
+              preexisting: {type: boolean}
+        fills:
+          type: array
+          items:
+            type: object
+            required: [id, orderId, symbol, side, quantity, quoteQuantity, price, fee, feeAsset, at, delta, balanceAfter]
+            properties:
+              id: {type: string}
+              orderId: {type: string}
+              symbol: {type: string}
+              side: {type: string, enum: [BUY, SELL]}
+              positionSide: {type: string, enum: [BOTH, LONG, SHORT]}
+              quantity: {type: string}
+              quoteQuantity: {type: string}
+              price: {type: string}
+              fee: {type: string}
+              feeAsset: {type: string}
+              at: {type: string, format: date-time}
+              delta: {type: string}
+              balanceAfter: {type: [string, 'null']}
+    ReplayObservation:
+      type: [object, 'null']
+      required: [observedAt, quantity]
+      properties:
+        observedAt: {type: string, format: date-time}
+        quantity: {type: string}
     Decimal:
       type: string
       pattern: "^-?[0-9]+(\\.[0-9]+)?$"
@@ -768,6 +990,10 @@ components:
       - allocation
       - assetClassAllocation
       properties:
+        date:
+          type: string
+          format: date
+          description: 日终视图按北京时间标注的已结束自然日。
         staleWallets:
           type: array
           items: {"$ref": "#/components/schemas/StaleWallet"}

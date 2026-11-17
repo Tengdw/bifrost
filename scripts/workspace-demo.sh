@@ -9,18 +9,20 @@ cleanup(){ if [[ -n ${app_pid:-} ]]; then kill "$app_pid" 2>/dev/null || true; w
 trap cleanup EXIT
 "$pgbin/initdb" -D "$tmp/data" --auth=trust --username=bifrost --locale=C >/dev/null
 "$pgbin/pg_ctl" -w -D "$tmp/data" -o "-h '' -k $tmp" -l "$tmp/server.log" start >/dev/null
-export DATABASE_URL_FILE="$tmp/db" MASTER_KEY_FILE="$tmp/master" SESSION_TOKEN_FILE="$tmp/session"
+export DATABASE_URL_FILE="$tmp/db" MASTER_KEY_FILE="$tmp/master"
 echo "postgres://bifrost@/postgres?host=$tmp" >"$DATABASE_URL_FILE"
 openssl rand -base64 32 >"$MASTER_KEY_FILE"
-openssl rand -hex 32 >"$SESSION_TOKEN_FILE"
+
 go build -o "$tmp/bifrost" ./cmd/bifrost
 "$tmp/bifrost" -mode synthetic -migrate
-echo "本机临时登录口令文件：$SESSION_TOKEN_FILE"
+"$tmp/bifrost" -mode synthetic -demo-admin >"$tmp/demo-password"
+echo "演示账号 demo，临时密码文件：$tmp/demo-password"
 port=${BIFROST_PORT:-8080}
 if [[ ${1:-serve} == verify-browser ]]; then
+ export BIFROST_PUBLIC_ORIGIN="http://localhost:$port"
  "$tmp/bifrost" -mode synthetic -port "$port" & app_pid=$!
- for _ in {1..50}; do if curl -s --max-time 1 "http://127.0.0.1:$port/latest" >/dev/null; then break; fi; sleep 0.1; done
- BIFROST_SMOKE_URL="http://127.0.0.1:$port" BIFROST_SMOKE_SESSION_FILE="$SESSION_TOKEN_FILE" npm --prefix web run test:browser
+ for _ in {1..50}; do if curl -fs --max-time 1 "$BIFROST_PUBLIC_ORIGIN/latest" >/dev/null; then break; fi; sleep 0.1; done
+ BIFROST_SMOKE_URL="$BIFROST_PUBLIC_ORIGIN" BIFROST_SMOKE_PASSWORD_FILE="$tmp/demo-password" npm --prefix web run test:browser
 else
  "$tmp/bifrost" -mode synthetic -port "$port"
 fi

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net"
@@ -12,86 +11,68 @@ import (
 )
 
 type serving struct {
-	Addr, Origin, Host, Cert, Key string
-	Secure                        bool
+	Addr, Origin, Host string
 }
 
-func servingConfig(mode string, port uint, listen, publicOrigin, cert, key string) (serving, error) {
-	cfg := serving{Addr: listen, Cert: cert, Key: key}
+func isLoopback(host string) bool {
+	return net.ParseIP(host).IsLoopback() || strings.EqualFold(host, "localhost")
+}
+
+func validPort(port string) bool {
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+func servingConfig(port uint, listen, publicOrigin string) (serving, error) {
+	cfg := serving{Addr: listen}
 	if cfg.Addr == "" {
 		cfg.Addr = fmt.Sprintf("127.0.0.1:%d", port)
 	}
 	host, portText, err := net.SplitHostPort(cfg.Addr)
-	if err != nil {
-		return cfg, errors.New("BIFROST_LISTEN_ADDR must be host:port")
+	if err != nil || !validPort(portText) {
+		return cfg, errors.New("BIFROST_LISTEN_ADDR must be host:port with a port between 1 and 65535")
 	}
-	n, err := strconv.Atoi(portText)
-	if err != nil || n < 1 || n > 65535 {
-		return cfg, errors.New("listen port must be between 1 and 65535")
-	}
-	if (cert == "") != (key == "") {
-		return cfg, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must be configured together")
-	}
-	cfg.Secure = cert != ""
-	if mode == "readonly" && !cfg.Secure {
-		return cfg, errors.New("readonly mode requires TLS_CERT_FILE and TLS_KEY_FILE")
-	}
-	loopback := net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
 	if publicOrigin == "" {
-		if !loopback {
-			return cfg, errors.New("non-loopback listeners require BIFROST_PUBLIC_ORIGIN and TLS")
+		if !isLoopback(host) {
+			return cfg, errors.New("non-loopback listeners require BIFROST_PUBLIC_ORIGIN")
 		}
-		cfg.Host = net.JoinHostPort(host, portText)
-		cfg.Origin = "http://" + cfg.Host
-		if cfg.Secure {
-			cfg.Origin = "https://" + cfg.Host
-		}
-		return cfg, nil
+		publicOrigin = "http://" + net.JoinHostPort(host, portText)
 	}
 	u, err := url.Parse(publicOrigin)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
-		return cfg, errors.New("BIFROST_PUBLIC_ORIGIN must be an HTTPS origin without path, query, fragment or userinfo")
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		return cfg, errors.New("BIFROST_PUBLIC_ORIGIN must be an origin without path, query, fragment or userinfo")
 	}
-	if !cfg.Secure {
-		return cfg, errors.New("BIFROST_PUBLIC_ORIGIN requires TLS_CERT_FILE and TLS_KEY_FILE")
+	if u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(host) && isLoopback(u.Hostname())) {
+		return cfg, errors.New("BIFROST_PUBLIC_ORIGIN requires HTTPS outside loopback development")
 	}
-	if p := u.Port(); p != "" {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 1 || n > 65535 {
-			return cfg, errors.New("invalid public origin port")
-		}
+	if p := u.Port(); p != "" && !validPort(p) {
+		return cfg, errors.New("invalid public origin port")
 	}
-	// 浏览器会将 HTTPS 默认端口规范化；Origin 与 Host 使用同一规范值。
 	cfg.Host = strings.ToLower(u.Host)
-	if u.Port() == "443" {
+	// 浏览器省略默认端口，反向代理应保留浏览器请求的 Host。
+	if u.Scheme == "https" && u.Port() == "443" {
 		cfg.Host = strings.TrimSuffix(cfg.Host, ":443")
 	}
-	cfg.Origin = "https://" + cfg.Host
+	if u.Scheme == "http" && u.Port() == "80" {
+		cfg.Host = strings.TrimSuffix(cfg.Host, ":80")
+	}
+	cfg.Origin = u.Scheme + "://" + cfg.Host
 	return cfg, nil
 }
 
-func applicationHandler(api http.Handler, token string, cfg serving) http.Handler {
+func applicationHandler(api, authentication http.Handler, cfg serving) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/api/v1/auth/", authentication)
 	mux.Handle("/api/", api)
-	mux.HandleFunc("POST /session", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != cfg.Origin {
-			http.Error(w, "Forbidden", 403)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		if subtle.ConstantTimeCompare([]byte(r.PostFormValue("token")), []byte(token)) != 1 {
-			http.Error(w, "Unauthorized", 401)
-			return
-		}
-		http.SetCookie(w, &http.Cookie{Name: "bifrost_session", Value: token, HttpOnly: true, Secure: cfg.Secure, SameSite: http.SameSiteStrictMode, Path: "/"})
-		http.Redirect(w, r, "/latest", http.StatusSeeOther)
-	})
-	mux.HandleFunc("GET /latest", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, "web/dist/index.html") })
+	serveIndex := func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, "web/dist/index.html") }
+	for _, path := range []string{"/latest", "/accounts", "/security"} {
+		mux.HandleFunc("GET "+path, serveIndex)
+	}
 	mux.Handle("GET /assets/", http.FileServer(http.Dir("web/dist")))
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/latest", 302) })
+	mux.HandleFunc("GET /{$}", serveIndex)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.EqualFold(r.Host, cfg.Host) {
-			http.Error(w, "Forbidden", 403)
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 		mux.ServeHTTP(w, r)

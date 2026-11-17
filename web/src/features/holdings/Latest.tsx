@@ -78,24 +78,6 @@ export function Latest({
       clearTimeout(timer);
     };
   }, [attempt, accountIds.join(","), revision]);
-  if (state.kind === "login")
-    return (
-      <section>
-        <h2>打开本地演示</h2>
-        <form method="post" action="/session">
-          <label>
-            演示会话口令{" "}
-            <input
-              required
-              type="password"
-              name="token"
-              autoComplete="current-password"
-            />
-          </label>{" "}
-          <button>进入</button>
-        </form>
-      </section>
-    );
   if (state.kind !== "ready")
     return (
       <section aria-live="polite">
@@ -106,10 +88,20 @@ export function Latest({
               ? "正在读取同批持仓…"
               : state.kind === "empty"
                 ? "暂无已采集批次"
-                : "读取失败，请重试。"}
+                : state.kind === "login"
+                  ? "会话已过期，请重新登录。"
+                  : "读取失败，请重试。"}
         </p>
         {state.kind !== "loading" && state.kind !== "running" && (
-          <Button onClick={() => retry(attempt + 1)}>重新读取</Button>
+          <Button
+            onClick={() =>
+              state.kind === "login"
+                ? window.location.reload()
+                : retry(attempt + 1)
+            }
+          >
+            {state.kind === "login" ? "重新登录" : "重新读取"}
+          </Button>
         )}
       </section>
     );

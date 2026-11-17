@@ -1,11 +1,8 @@
 // Fictional account equity in USD cents. External flows occur before the day's P&L.
 export const DAY=86400000, start=Date.UTC(2026,7,19), end=Date.UTC(2026,10,16)
-export const names=['主账号','策略账号'], wallets=['现货','资金','赚币','U 本位合约权益']
+export const names=['主账号','策略账号']
 export const mix=[[.47,.095,.31,.125],[.32,.08,.13,.47]]
 export const date=(n:number)=>new Date(n).toISOString().slice(0,10)
-export const money=(v:number,d=2)=> (v/100).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d})
-export const signed=(v:number,d=2)=>(v<0?'−':v>0?'+':'')+money(Math.abs(v),d)
-export const percent=(v:number)=>(v<0?'−':v>0?'+':'')+Math.abs(v*100).toFixed(2)+'%'
 export const accounts=names.map((_,j)=>{
  let balance=[7500000,2850000][j],seed=354+j*248
  return Array.from({length:Math.round((end-start)/DAY)+1},(_,i)=>{

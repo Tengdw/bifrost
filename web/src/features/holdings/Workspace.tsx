@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Alert, Button, Select, Table } from "antd";
 import { accounts, refresh, sync, RequestError } from "../../api/snapshots";
 import type { Account, SyncStatus, Wallet } from "../../api/snapshots";
-import { Accounts } from "../accounts/Accounts";
 import { Latest } from "./Latest";
 const walletOptions = [
   { value: "spot", label: "现货" },
@@ -86,7 +85,6 @@ export function Workspace() {
   }
   return (
     <>
-      <Accounts items={items} onChange={() => setVersion((v) => v + 1)} />
       <section>
         <h2>查看与刷新</h2>
         <div className="controls">
@@ -116,7 +114,7 @@ export function Workspace() {
             />
           </label>
           <Button loading={sending} onClick={() => void request()}>
-            手动刷新
+            立即采集
           </Button>
           <Button onClick={() => setVersion((v) => v + 1)}>重新读取</Button>
         </div>
